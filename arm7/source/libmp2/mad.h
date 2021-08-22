@@ -21,13 +21,13 @@
  */
 
 # ifdef __cplusplus
-extern "C" {
+//extern "C" {
 # endif
 
 #undef assert
 #define assert(x)
 
-# define FPM_INTEL
+//# define FPM_INTEL
 
 
 
@@ -910,6 +910,12 @@ enum mad_flow {
   MAD_FLOW_IGNORE   = 0x0020	/* ignore the current frame */
 };
 
+struct mad_decoder_sync {
+  struct mad_stream stream;
+  struct mad_frame frame;
+  struct mad_synth synth;
+};
+
 struct mad_decoder {
   enum mad_decoder_mode mode;
 
@@ -921,11 +927,7 @@ struct mad_decoder {
     int out;
   } async;
 
-  struct {
-    struct mad_stream stream;
-    struct mad_frame frame;
-    struct mad_synth synth;
-  } *sync;
+  struct mad_decoder_sync *sync;
 
   void *cb_data;
 
@@ -963,5 +965,5 @@ int mad_decoder_message(struct mad_decoder *, void *, unsigned int *);
 # endif
 
 # ifdef __cplusplus
-}
+//}
 # endif

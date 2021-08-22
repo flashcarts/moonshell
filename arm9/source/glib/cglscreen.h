@@ -7,30 +7,25 @@
 
 #include "cglcanvas.h"
 
-enum EScrMainID {ScrMainID_View,ScrMainID_Back};
+enum EScrMainMode {ESMM_Normal,ESMM_ForARM7};
 
 class CglScreenMain
 {
   u16 *VRAMBufArray[2];
   u32 BackVRAMPage;
-  bool WideFlag;
+  EScrMainMode mode;
   CglScreenMain(const CglScreenMain&);
   CglScreenMain& operator=(const CglScreenMain&);
 public:
-  CglCanvas *pCanvas;
+  CglCanvas *pViewCanvas,*pBackCanvas;
   CglScreenMain(void);
   ~CglScreenMain(void);
   void Flip(const bool ShowFlag);
-  u16* GetVRAMBuf(EScrMainID ScrMainID) const;
-  void SetTargetPage(EScrMainID ScrMainID);
+  void FlipForVSyncAuto(void);
   void SetBlendLevel(const int BlendLevel);
   void SetBlendLevelManual(const int BlendLevelBack,const int BlendLevelView);
-  void CopyFullViewToBack(void);
-  void CopyFullBackToView(void);
-  void SetWideFlag(bool w);
-  bool GetWideFlag(void);
-  void SetViewSize(int w,int h);
-  void SetViewport(int x,int y,float fx,float fy);
+  void SetMode(EScrMainMode _mode);
+  EScrMainMode GetMode(void);
 };
 
 class CglScreenMainOverlay
@@ -42,12 +37,12 @@ public:
   CglScreenMainOverlay(void);
   ~CglScreenMainOverlay(void);
   u16* GetVRAMBuf(void) const;
-  void SetVisible(bool Visible);
+  void SetPosition_for_Right64x192(s32 x,s32 y) const;
+  void SetVisible_for_LeftTop128x64(bool Visible) const;
 };
 
 class CglScreenSub
 {
-  u32 FlipMode;
   CglScreenSub(const CglScreenSub&);
   CglScreenSub& operator=(const CglScreenSub&);
 public:
@@ -55,7 +50,7 @@ public:
   CglScreenSub(void);
   ~CglScreenSub(void);
   u16* GetVRAMBuf(void) const;
-  void SetFlipMode(u32 _FlipMode);
+  void SetBlackOutLevel16(const int Level16);
 };
 
 #endif

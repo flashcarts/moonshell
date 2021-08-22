@@ -4,9 +4,10 @@
 
 #include <NDS.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#define ALIGN32 __attribute__ ((align(4)))
+
+void SetMemoryMode(bool _MappedVRAM);
+void SetMemoryMode_End(void);
 
 void* safemalloc(int size);
 void safefree(void *ptr);
@@ -18,9 +19,9 @@ void MemCopy16DMA3(void *src,void *dst,u32 len);
 void MemSet16DMA3(u16 v,void *dst,u32 len);
 //void MemSet32DMA3(u32 v,void *dst,u32 len);
 
-#ifdef __cplusplus
-}
-#endif
+#define MemCopy32swi256bit(src,dst,len) swiFastCopy(src,dst,COPY_MODE_COPY | ((len)>>2) );
+
+u32 PrintFreeMem(void);
 
 #endif
 

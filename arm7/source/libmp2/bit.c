@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.

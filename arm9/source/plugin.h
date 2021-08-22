@@ -18,27 +18,14 @@ typedef struct {
   void (*MWin_ProgressShow)(char *TitleStr,s32 _Max);
   void (*MWin_ProgressSetPos)(s32 _Position);
   void (*MWin_ProgressHide)(void);
-  char *(*GetINIData)(void);
-  int (*GetINISize)(void);
-  void *(*GetBINData)(void);
-  int (*GetBINSize)(void);
   
-  void (*DC_FlushRangeOverrun)(const void *v,u32 size);
   void (*MemCopy8CPU)(const void *src,void *dst,u32 len);
   void (*MemCopy16CPU)(const void *src,void *dst,u32 len);
   void (*MemCopy32CPU)(const void *src,void *dst,u32 len);
-  void (*MemSet16CPU)(const vu16 v,void *dst,u32 len);
-  void (*MemSet32CPU)(const u32 v,void *dst,u32 len);
-  void (*MemCopy16DMA3)(const void *src,void *dst,u32 len);
-  void (*MemCopy32DMA3)(const void *src,void *dst,u32 len);
-  void (*MemSet16DMA3)(const vu16 v,void *dst,u32 len);
-  void (*MemSet32DMA3)(const u32 v,void *dst,u32 len);
-  void (*MemSet8DMA3)(const u8 v,void *dst,u32 len);
-  void (*MemCopy16DMA2)(const void *src,void *dst,u32 len);
-  void (*MemSet16DMA2)(const u16 v,void *dst,u32 len);
-  void (*MemCopy32swi256bit)(const void *src,void *dst,u32 len);
-  void *(*safemalloc)(const int size);
-  void (*safefree)(const void *ptr);
+  void (*MemSet16CPU)(vu16 v,void *dst,u32 len);
+  void (*MemSet32CPU)(u32 v,void *dst,u32 len);
+  void *(*safemalloc)(int size);
+  void (*safefree)(void *ptr);
   
   void *(*calloc)(size_t nmemb, size_t size);
   void *(*malloc)(size_t size);
@@ -90,17 +77,8 @@ typedef struct {
   char *(*strtok)(char *s, const char *delim);
   size_t (*strxfrm)(char *dest, const char *src, size_t n);
   
-  int (*GetBINFileHandle)(void);
-  int (*msp_fopen)(const char *fn);
-  bool (*msp_fclose)(int fh);
-  
-  void (*extmem_SetCount)(u32 Count);
-  bool (*extmem_Exists)(u32 SlotIndex);
-  bool (*extmem_Alloc)(u32 SlotIndex,u32 Size);
-  bool (*extmem_Write)(u32 SlotIndex,void *pData,u32 DataSize);
-  bool (*extmem_Read)(u32 SlotIndex,void *pData,u32 DataSize);
-  
-  u32 (*formdt_FormatDate)(char *str, u32 size, const u32 year, const u32 month, const u32 day);
+  u32 d00,d01,d02,d03,d04,d05,d06,d07,d08,d09;
+  u32 d10,d11,d12,d13,d14,d15,d16,d17,d18,d19;
 } TPlugin_StdLib;
 
 typedef u16 UnicodeChar;
@@ -111,13 +89,13 @@ typedef struct {
   bool (*Start)(int FileHandle);
   void (*Free)(void);
   
-  void (*RefreshScreen)(u32 OffsetX,u32 OffsetY,u16 *pBuf,u32 BufWidth,u32 DrawWidth,u32 DrawHeight,bool HalfMode);
+  void (*GetBitmap24)(u32 LineY,u8 *pBM);
   
   s32 (*GetWidth)(void);
   s32 (*GetHeight)(void);
   
   int (*GetInfoIndexCount)(void);
-  bool (*GetInfoStrL)(int idx,char *str,int len);
+  bool (*GetInfoStrA)(int idx,char *str,int len);
   bool (*GetInfoStrW)(int idx,UnicodeChar *str,int len);
   bool (*GetInfoStrUTF8)(int idx,char *str,int len);
 } TPlugin_ImageLib;
@@ -139,31 +117,12 @@ typedef struct {
   u32 (*GetChannelCount)(void);
   u32 (*GetSampleRate)(void);
   u32 (*GetSamplePerFrame)(void);
-  int (*GetInfoIndexCount)(void);
   
-  bool (*GetInfoStrL)(int idx,char *str,int len);
+  int (*GetInfoIndexCount)(void);
+  bool (*GetInfoStrA)(int idx,char *str,int len);
   bool (*GetInfoStrW)(int idx,UnicodeChar *str,int len);
   bool (*GetInfoStrUTF8)(int idx,char *str,int len);
 } TPlugin_SoundLib;
-
-#endif
-
-#ifdef PluginMode_Clock
-
-typedef struct {
-  u32 Year,Month,Day;
-  u32 Hour,Minuts,Second;
-  bool SystemRTC24Hour;
-  u32 Temperature12; // fix16.12
-} TPlugin_ClockLib_Time;
-
-typedef struct {
-  bool (*Start)(int FileHandle);
-  void (*Free)(void);
-  
-  u16 (*ProcKeys)(u16 keys);
-  void (*UpdateVsync)(u16 *pbmbuf,int VsyncPassedCount,bool RunningFile,bool RequestRefresh,TPlugin_ClockLib_Time Time);
-} TPlugin_ClockLib;
 
 #endif
 
@@ -173,7 +132,7 @@ extern bool LoadLibrary(const TPlugin_StdLib *_pStdLib);
 extern void FreeLibrary(void);
 extern int QueryInterfaceLibrary(void);
 
-enum EPluginType {EPT_None=0,EPT_Image=1,EPT_Sound=2,EPT_Clock=3};
+enum EPluginType {EPT_None=0,EPT_Image=1,EPT_Sound=2};
 
 #ifdef __cplusplus
 }

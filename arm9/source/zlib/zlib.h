@@ -33,10 +33,6 @@
 
 #include "zconf.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define ZLIB_VERSION "1.2.3"
 #define ZLIB_VERNUM 0x1230
 
@@ -1349,9 +1345,5 @@ ZEXTERN int ZEXPORT inflateBackInit_ OF((z_streamp strm, int windowBits,
 ZEXTERN const char   * ZEXPORT zError           OF((int));
 ZEXTERN int            ZEXPORT inflateSyncPoint OF((z_streamp z));
 ZEXTERN const uLongf * ZEXPORT get_crc_table    OF((void));
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* ZLIB_H */

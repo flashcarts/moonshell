@@ -28,7 +28,7 @@
 
 #include "config.h"
 
-#include <inttypes.h>
+#include "inttypes.h"
 #include <stdlib.h>	/* defines NULL */
 #include <string.h>	/* memcmp */
 
@@ -43,10 +43,10 @@
 #define PIC_DISPLAY_EXT 0x80
 #define PIC_CODING_EXT 0x100
 
-#include "../../arm9tcm.h"
+#define inline __forceinline
 
 /* default intra quant matrix, in zig-zag order */
-static const uint8_t default_intra_quantizer_matrix[64] ATTR_ALIGN(16) = {
+static const ATTR_ALIGN16 uint8_t default_intra_quantizer_matrix[64] = {
     8,
     16, 16,
     19, 16, 19,
@@ -71,7 +71,7 @@ static const uint8_t mpeg2_scan_norm_master[64] = {
     35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
 };
-DATA_IN_DTCM_ALIGN16 static uint8_t mpeg2_scan_norm[64];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 uint8_t mpeg2_scan_norm[64];
 
 static const uint8_t mpeg2_scan_alt_master[64] = {
     /* Alternate scan pattern */
@@ -80,7 +80,7 @@ static const uint8_t mpeg2_scan_alt_master[64] = {
     51, 59, 20, 28,  5, 13,  6, 14, 21, 29, 36, 44, 52, 60, 37, 45,
     53, 61, 22, 30,  7, 15, 23, 31, 38, 46, 54, 62, 39, 47, 55, 63
 };
-DATA_IN_DTCM_ALIGN16 static uint8_t mpeg2_scan_alt[64];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 uint8_t mpeg2_scan_alt[64];
 
 void mpeg2_header_state_init (mpeg2dec_t * mpeg2dec)
 {
@@ -157,7 +157,7 @@ int mpeg2_header_sequence (mpeg2dec_t * mpeg2dec)
 {
     uint8_t * buffer = mpeg2dec->chunk_start;
     mpeg2_sequence_t * sequence = &(mpeg2dec->new_sequence);
-    static unsigned int frame_period[16] = {
+    static DATA_IN_MTCM_SET unsigned int frame_period[16] = {
 	0, 1126125, 1125000, 1080000, 900900, 900000, 540000, 450450, 450000,
 	/* unofficial: xing 15 fps */
 	1800000,
@@ -492,17 +492,17 @@ mpeg2_state_t mpeg2_header_picture_start (mpeg2dec_t * mpeg2dec)
     mpeg2dec->state = STATE_PICTURE;
     
     picture->flags = 0;
-    picture->tag = picture->tag2 = 0;
+    //picture->tag = picture->tag2 = 0;
     if (mpeg2dec->num_tags) {
 	if (mpeg2dec->bytes_since_tag >= 4) {
 	    mpeg2dec->num_tags = 0;
-	    picture->tag = mpeg2dec->tag_current;
-	    picture->tag2 = mpeg2dec->tag2_current;
+	    //picture->tag = mpeg2dec->tag_current;
+	    //picture->tag2 = mpeg2dec->tag2_current;
 	    picture->flags = PIC_FLAG_TAGS;
 	} else if (mpeg2dec->num_tags > 1) {
 	    mpeg2dec->num_tags = 1;
-	    picture->tag = mpeg2dec->tag_previous;
-	    picture->tag2 = mpeg2dec->tag2_previous;
+	    //picture->tag = mpeg2dec->tag_previous;
+	    //picture->tag2 = mpeg2dec->tag2_previous;
 	    picture->flags = PIC_FLAG_TAGS;
 	}
     }
@@ -685,39 +685,34 @@ void mpeg2_header_picture_finalize (mpeg2dec_t * mpeg2dec, uint32_t accels)
 	    if (!mpeg2dec->convert_start) {
 		int y_size, uv_size;
 
-		mpeg2dec->decoder->convert_id =
-		    mpeg2_malloc (mpeg2dec->convert_id_size,
-				  MPEG2_ALLOC_CONVERT_ID);
-		mpeg2dec->convert (MPEG2_CONVERT_START,
-				   mpeg2dec->decoder->convert_id,
-				   &(mpeg2dec->sequence),
-				   mpeg2dec->convert_stride, accels,
-				   mpeg2dec->convert_arg, &convert_init);
+		mpeg2dec->decoder->convert_id = mpeg2_malloc (mpeg2dec->convert_id_size, MPEG2_ALLOC_CONVERT_ID);
+    memset (mpeg2dec->decoder->convert_id,0,mpeg2dec->convert_id_size);
+		mpeg2dec->convert (MPEG2_CONVERT_START, mpeg2dec->decoder->convert_id, &(mpeg2dec->sequence), mpeg2dec->convert_stride, accels, mpeg2dec->convert_arg, &convert_init);
 		mpeg2dec->convert_start = convert_init.start;
 		mpeg2dec->decoder->convert = convert_init.copy;
 
 		y_size = decoder->stride_frame * mpeg2dec->sequence.height;
 		uv_size = y_size >> (2 - mpeg2dec->decoder->chroma_format);
-		mpeg2dec->yuv_buf[0][0] =
-		    (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[0][1] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[0][2] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[1][0] =
-		    (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[1][1] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[1][2] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+		mpeg2dec->yuv_buf[0][0] = (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[0][0],0,y_size);
+		mpeg2dec->yuv_buf[0][1] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[0][1],0,uv_size);
+		mpeg2dec->yuv_buf[0][2] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[0][2],0,uv_size);
+		mpeg2dec->yuv_buf[1][0] = (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[1][0],0,y_size);
+		mpeg2dec->yuv_buf[1][1] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[1][1],0,uv_size);
+		mpeg2dec->yuv_buf[1][2] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[1][2],0,uv_size);
 		y_size = decoder->stride_frame * 32;
 		uv_size = y_size >> (2 - mpeg2dec->decoder->chroma_format);
-		mpeg2dec->yuv_buf[2][0] =
-		    (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[2][1] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
-		mpeg2dec->yuv_buf[2][2] =
-		    (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+		mpeg2dec->yuv_buf[2][0] = (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[2][0],0,y_size);
+		mpeg2dec->yuv_buf[2][1] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[2][1],0,uv_size);
+		mpeg2dec->yuv_buf[2][2] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+    memset (mpeg2dec->yuv_buf[2][2],0,uv_size);
 	    }
 	    if (!mpeg2dec->custom_fbuf) {
 		while (mpeg2dec->alloc_index < 3) {
@@ -725,15 +720,12 @@ void mpeg2_header_picture_finalize (mpeg2dec_t * mpeg2dec, uint32_t accels)
 
 		    fbuf = &mpeg2dec->fbuf_alloc[mpeg2dec->alloc_index++].fbuf;
 		    fbuf->id = NULL;
-		    fbuf->buf[0] =
-			(uint8_t *) mpeg2_malloc (convert_init.buf_size[0],
-						  MPEG2_ALLOC_CONVERTED);
-		    fbuf->buf[1] =
-			(uint8_t *) mpeg2_malloc (convert_init.buf_size[1],
-						  MPEG2_ALLOC_CONVERTED);
-		    fbuf->buf[2] =
-			(uint8_t *) mpeg2_malloc (convert_init.buf_size[2],
-						  MPEG2_ALLOC_CONVERTED);
+		    fbuf->buf[0] = (uint8_t *) mpeg2_malloc (convert_init.buf_size[0], MPEG2_ALLOC_CONVERTED);
+        memset (fbuf->buf[0],0,convert_init.buf_size[0]);
+		    fbuf->buf[1] = (uint8_t *) mpeg2_malloc (convert_init.buf_size[1], MPEG2_ALLOC_CONVERTED);
+        memset (fbuf->buf[1],0,convert_init.buf_size[1]);
+		    fbuf->buf[2] = (uint8_t *) mpeg2_malloc (convert_init.buf_size[2], MPEG2_ALLOC_CONVERTED);
+        memset (fbuf->buf[2],0,convert_init.buf_size[2]);
 		}
 		mpeg2_set_fbuf (mpeg2dec, (decoder->coding_type == B_TYPE));
 	    }
@@ -746,12 +738,9 @@ void mpeg2_header_picture_finalize (mpeg2dec_t * mpeg2dec, uint32_t accels)
 		fbuf->id = NULL;
 		y_size = decoder->stride_frame * mpeg2dec->sequence.height;
 		uv_size = y_size >> (2 - decoder->chroma_format);
-		fbuf->buf[0] = (uint8_t *) mpeg2_malloc (y_size,
-							 MPEG2_ALLOC_YUV);
-		fbuf->buf[1] = (uint8_t *) mpeg2_malloc (uv_size,
-							 MPEG2_ALLOC_YUV);
-		fbuf->buf[2] = (uint8_t *) mpeg2_malloc (uv_size,
-							 MPEG2_ALLOC_YUV);
+		fbuf->buf[0] = (uint8_t *) mpeg2_malloc (y_size, MPEG2_ALLOC_YUV);
+		fbuf->buf[1] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
+		fbuf->buf[2] = (uint8_t *) mpeg2_malloc (uv_size, MPEG2_ALLOC_YUV);
 	    }
 	    mpeg2_set_fbuf (mpeg2dec, (decoder->coding_type == B_TYPE));
 	}
@@ -793,7 +782,7 @@ static int quant_matrix_ext (mpeg2dec_t * mpeg2dec)
 
 int mpeg2_header_extension (mpeg2dec_t * mpeg2dec)
 {
-    static int (* parser[]) (mpeg2dec_t *) = {
+    static DATA_IN_MTCM_SET int (* parser[]) (mpeg2dec_t *) = {
 	0, sequence_ext, sequence_display_ext, quant_matrix_ext,
 	copyright_ext, 0, 0, picture_display_ext, picture_coding_ext
     };
@@ -818,7 +807,7 @@ int mpeg2_header_user_data (mpeg2dec_t * mpeg2dec)
 
 static void prescale (mpeg2dec_t * mpeg2dec, int index)
 {
-    static int non_linear_scale [] = {
+    static DATA_IN_MTCM_SET const ATTR_ALIGN32 int non_linear_scale [] = {
 	 0,  1,  2,  3,  4,  5,   6,   7,
 	 8, 10, 12, 14, 16, 18,  20,  22,
 	24, 28, 32, 36, 40, 44,  48,  52,
@@ -831,13 +820,23 @@ static void prescale (mpeg2dec_t * mpeg2dec, int index)
 	mpeg2dec->scaled[index] = mpeg2dec->q_scale_type;
         uint16_t (*_quantizer_prescale)[32][64]=decoder->quantizer_prescale[index];
 
-	for (i = 0; i < 32; i++) {
-	    k = mpeg2dec->q_scale_type ? non_linear_scale[i] : (i << 1);
-//	    decoder->quantizer_scales[i] = k;
-	    for (j = 0; j < 64; j++)
-		(*_quantizer_prescale)[i][j] =
-		    k * mpeg2dec->quantizer_matrix[index][j];
-	}
+	if(mpeg2dec->q_scale_type){
+		for (i = 0; i < 32; i++) {
+	    	k = non_linear_scale[i];
+//		    decoder->quantizer_scales[i] = k;
+		    for (j = 0; j < 64; j++)
+			(*_quantizer_prescale)[i][j] =
+		    	k * mpeg2dec->quantizer_matrix[index][j];
+		}
+		}else{
+		for (i = 0; i < 32; i++) {
+	    	k = (i << 1);
+//		    decoder->quantizer_scales[i] = k;
+		    for (j = 0; j < 64; j++)
+			(*_quantizer_prescale)[i][j] =
+		    	k * mpeg2dec->quantizer_matrix[index][j];
+		}
+    }
     }
 }
 

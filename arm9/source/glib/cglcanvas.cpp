@@ -6,33 +6,24 @@
 #include "glmemtool.h"
 #include "cglcanvas.h"
 
-#include "cp0_glf_bin.h"
-#include "cp0_glu_bin.h"
-
 static CglFont *pCglFontDefault=NULL;
-static CglUnicode *pCglUnicodeDefault=NULL;
+
+#define _GetScanLine(y) (&VRAMBuf[y*Width])
 
 CglCanvas::CglCanvas(u16 *_VRAMBuf,const int _Width,const int _Height,const EPixelFormat _PixelFormat)
 {
+//  glDebugPrintf("new Canvas %x,%d,%d,%d\n",_VRAMBuf,_Width,_Height,_PixelFormat);
+  
   VRAMBuf=NULL;
   VRAMBufInsideAllocatedFlag=false;
   Width=0;
   Height=0;
-  ScanLine=NULL;
   Color=0;
   LastX=0;
   LastY=0;
   AALineFlag=false;
   
-  if(pCglFontDefault==NULL){
-    pCglFontDefault=new CglFont((u8*)cp0_glf_bin,cp0_glf_bin_size);
-  }
-  pCglFont=pCglFontDefault;
-  
-  if(pCglUnicodeDefault==NULL){
-    pCglUnicodeDefault=new CglUnicode((u8*)cp0_glu_bin,cp0_glu_bin_size);
-  }
-  pCglUnicode=pCglUnicodeDefault;
+  pCglFont=NULL;
   
   SetVRAMBuf(_VRAMBuf,_Width,_Height,_PixelFormat);
 }
@@ -43,17 +34,14 @@ CglCanvas::~CglCanvas(void)
     VRAMBufInsideAllocatedFlag=false;
     glsafefree(VRAMBuf); VRAMBuf=NULL;
   }
-  if(ScanLine!=NULL){
-    glsafefree(ScanLine); ScanLine=NULL;
-  }
 }
 
-u16* CglCanvas::GetVRAMBuf(void) const
+CODE_IN_ITCM u16* CglCanvas::GetVRAMBuf(void) const
 {
   return(VRAMBuf);
 }
 
-void CglCanvas::SetVRAMBuf(u16 *_VRAMBuf,const int _Width,const int _Height,const EPixelFormat _PixelFormat)
+CODE_IN_ITCM void CglCanvas::SetVRAMBuf(u16 *_VRAMBuf,const int _Width,const int _Height,const EPixelFormat _PixelFormat)
 {
   if(VRAMBufInsideAllocatedFlag==true){
     VRAMBufInsideAllocatedFlag=false;
@@ -61,14 +49,7 @@ void CglCanvas::SetVRAMBuf(u16 *_VRAMBuf,const int _Width,const int _Height,cons
   }
   
   Width=_Width;
-  
-  if(Height!=_Height){
-    Height=_Height;
-    if(ScanLine!=NULL){
-      glsafefree(ScanLine); ScanLine=NULL;
-    }
-    ScanLine=(u16**)glsafemalloc(Height*sizeof(u16*));
-  }
+  Height=_Height;
   
   PixelFormat=_PixelFormat;
   
@@ -78,10 +59,6 @@ void CglCanvas::SetVRAMBuf(u16 *_VRAMBuf,const int _Width,const int _Height,cons
     }else{
     VRAMBufInsideAllocatedFlag=false;
     VRAMBuf=_VRAMBuf;
-  }
-  
-  for(int y=0;y<Height;y++){
-    ScanLine[y]=&VRAMBuf[y*Width];
   }
 }
 
@@ -95,11 +72,37 @@ int CglCanvas::GetHeight(void) const
   return(Height);
 }
 
+void CglCanvas::FillFull(const u16 _Color)
+{
+  u16 *pbuf=VRAMBuf;
+  u32 size=Width*Height;
+  u32 col=(u32)(_Color | (_Color<<16));
+  
+  if((size&1)!=0){
+    pbuf[size-1]=col;
+    size--;
+  }
+  
+  glMemSet32CPU(col,(u32*)pbuf,size*2);
+}
+
+void CglCanvas::FillFast(const int x,const int y,const int w,const int h)
+{
+  // 条件：キャンバス横サイズが2pixel単位、x,wが2pixel単位
+  
+  u32 col=(u32)(Color | (Color<<16));
+  
+  for(int py=y;py<(y+h);py++){
+    u16 *pbuf=_GetScanLine(py);
+    pbuf+=x;
+    
+    glMemSet32CPU(col,(u32*)pbuf,w*2);
+  }
+}
+
 u16* CglCanvas::GetScanLine(const int y) const
 {
-  if((y<0)||(Height<=y)) return(NULL);
-  
-  return(ScanLine[y]);
+  return(_GetScanLine(y));
 }
 
 bool CglCanvas::isInsidePosition(const int x,const int y) const
@@ -114,28 +117,28 @@ void CglCanvas::SetPixel(const int x,const int y,const u16 rgb)
 {
   if(isInsidePosition(x,y)==false) return;
   
-  ScanLine[y][x]=rgb;
+  _GetScanLine(y)[x]=rgb;
 }
 
 void CglCanvas::SetPixelAlpha(const int x,const int y,const u16 rgb,const int Alpha)
 {
   if(isInsidePosition(x,y)==false) return;
   
-  ScanLine[y][x]=ColorMargeAlpha(ScanLine[y][x],rgb,Alpha);
+  _GetScanLine(y)[x]=ColorMargeAlpha(_GetScanLine(y)[x],rgb,Alpha);
 }
 
 void CglCanvas::SetPixelAlphaAdd(const int x,const int y,const u16 rgb,const int Alpha)
 {
   if(isInsidePosition(x,y)==false) return;
   
-  ScanLine[y][x]=ColorMargeAlphaAdd(ScanLine[y][x],rgb,Alpha);
+  _GetScanLine(y)[x]=ColorMargeAlphaAdd(_GetScanLine(y)[x],rgb,Alpha);
 }
 
 u16 CglCanvas::GetPixel(const int x,const int y) const
 {
   if(isInsidePosition(x,y)==false) return(0);
   
-  return(ScanLine[y][x]);
+  return(_GetScanLine(y)[x]);
 }
 
 void CglCanvas::SetColor(const u16 _Color)
@@ -182,6 +185,10 @@ void CglCanvas::DrawLine(const int x1,const int y1,const int x2,const int y2)
     return;
   }
   
+  glDebugPrintf("Blocked free line function.\n");
+  ShowLogHalt();
+  
+#if 0
   if(abs(x2-x1)>abs(y2-y1)){
     int px=0;
     float py=0;
@@ -248,6 +255,7 @@ void CglCanvas::DrawLine(const int x1,const int y1,const int x2,const int y2)
     }
     return;
   }
+#endif
 }
 
 void CglCanvas::MoveTo(const int x,const int y)
@@ -265,12 +273,35 @@ void CglCanvas::LineTo(const int x,const int y)
 }
 
 
-void CglCanvas::FillBox(const int x,const int y,const int w,const int h)
+void CglCanvas::FillBox(int x,int y,int w,int h) const
 {
-  for(int py=y;py<(y+h);py++){
-    for(int px=x;px<(x+w);px++){
-      SetPixel(px,py,Color);
+  if(x<0){
+    w-=-x;
+    x=0;
+  }
+  
+  if(y<0){
+    h-=-y;
+    y=0;
+  }
+  
+  if(w<0) return;
+  if(h<0) return;
+  
+  if(Width<=x) return;
+  if(Height<=y) return;
+  
+  if(Width<(x+w)) w=Width-x;
+  if(Height<(y+h)) h=Height-y;
+  
+  u16 *pdata=&VRAMBuf[x+(y*Width)];
+  u32 col=Color;
+  
+  for(int y=0;y<h;y++){
+    for(int x=0;x<w;x++){
+      pdata[x]=col;
     }
+    pdata+=Width;
   }
 }
 
@@ -301,13 +332,6 @@ void CglCanvas::DrawBox(const int x,const int y,const int w,const int h)
   DrawLine(x1,y2,x1,y1);
 }
 
-void CglCanvas::SetFontBGColor(const u16 Color)
-{
-  CglFont *pFont=(CglFont*)pCglFont;
-  
-  pFont->SetBGColor(Color);
-}
-
 void CglCanvas::SetFontTextColor(const u16 Color)
 {
   CglFont *pFont=(CglFont*)pCglFont;
@@ -315,55 +339,145 @@ void CglCanvas::SetFontTextColor(const u16 Color)
   pFont->SetTextColor(Color);
 }
 
-void CglCanvas::TextOutA(const int x,const int y,const char *str) const
+const char *CglCanvas::TextOutA(const int x,const int y,const char *str) const
 {
   int dx=x;
   int dy=y;
+  
+  CglFont *pFont=(CglFont*)pCglFont;
+  
+  while(*str!=0){
+    TglUnicode uidx=(TglUnicode)*str;
+    u32 w=pFont->GetFontWidth(uidx);
+    if(Width<(dx+w)) return(str);
+    pFont->DrawFont((CglCanvas*)this,dx,dy,uidx);
+    dx+=w;
+    str++;
+  }
+  
+  return(str);
+}
+
+const TglUnicode *CglCanvas::TextOutW(const int x,const int y,const TglUnicode *str) const
+{
+  int dx=x;
+  int dy=y;
+  
+  CglFont *pFont=(CglFont*)pCglFont;
+  
+  while(*str!=0){
+    u32 w=pFont->GetFontWidth(*str);
+    if(Width<(dx+w)) return(str);
+    pFont->DrawFont((CglCanvas*)this,dx,dy,*str);
+    dx+=w;
+    str++;
+  }
+  
+  return(str);
+}
+
+void CglCanvas::TextOutUTF8(const int x,const int y,const char *str) const
+{
+  if(str==NULL) return;
+  if(*str==0) return;
+  
+  int dx=x;
+  int dy=y;
+  
+  CglFont *pFont=(CglFont*)pCglFont;
+  
+  while(*str!=0){
+    u32 b0=(byte)str[0],b1=(byte)str[1],b2=(byte)str[2];
+    TglUnicode uc;
+    
+    if(b0<0x80){
+      uc=b0;
+      str++;
+      }else{
+      if((b0&0xe0)==0xc0){ // 0b 110. ....
+        uc=((b0&~0xe0)<<6)+((b1&~0xc0)<<0);
+        str+=2;
+        }else{
+        if((b0&0xf0)==0xe0){ // 0b 1110 ....
+          uc=((b0&~0xf0)<<12)+((b1&~0xc0)<<6)+((b2&~0xc0)<<0);
+          str+=3;
+          }else{
+          uc=(u16)'?';
+          str+=4;
+        }
+      }
+    }
+    
+    u32 w=pFont->GetFontWidth(uc);
+    if(Width<(dx+w)) return;
+    pFont->DrawFont((CglCanvas*)this,dx,dy,uc);
+    dx+=w;
+  }
+}
+
+int CglCanvas::GetTextWidthA(const char *str) const
+{
+  int w=0;
   
   CglFont *pFont=(CglFont*)pCglFont;
   
   while(*str!=0){
     TglUnicode uidx=(TglUnicode)*str++;
-    pFont->DrawFont((CglCanvas*)this,dx,dy,uidx);
-    dx+=pFont->GetFontWidth(uidx);
+    w+=pFont->GetFontWidth(uidx);
   }
+  
+  return(w);
 }
 
-void CglCanvas::TextOutL(const int x,const int y,const char *str) const
+int CglCanvas::GetTextWidthW(const TglUnicode *str) const
 {
-  int dx=x;
-  int dy=y;
+  int w=0;
   
   CglFont *pFont=(CglFont*)pCglFont;
-  CglUnicode *pUnicode=(CglUnicode*)pCglUnicode;
   
   while(*str!=0){
-    TglUnicode uidx;
-    {
-      u16 lidx=(u16)*str++;
-      if(pUnicode->isAnkChar((char)lidx)==false){
-        lidx=(lidx << 8) | ((u16)*str++);
+    w+=pFont->GetFontWidth(*str);
+    str++;
+  }
+  
+  return(w);
+}
+
+int CglCanvas::GetTextWidthUTF8(const char *str) const
+{
+  if(str==NULL) return(0);
+  if(*str==0) return(0);
+  
+  CglFont *pFont=(CglFont*)pCglFont;
+  
+  int w=0;
+  
+  while(*str!=0){
+    u16 b0=(byte)str[0],b1=(byte)str[1],b2=(byte)str[2];
+    TglUnicode uc;
+    
+    if(b0<0x80){
+      uc=b0;
+      str++;
+      }else{
+      if((b0&0xe0)==0xc0){ // 0b 110. ....
+        uc=((b0&~0xe0)<<6)+((b1&~0xc0)<<0);
+        str+=2;
+        }else{
+        if((b0&0xf0)==0xe0){ // 0b 1110 ....
+          uc=((b0&~0xf0)<<12)+((b1&~0xc0)<<6)+((b2&~0xc0)<<0);
+          str+=3;
+          }else{
+          uc=(u16)'?';
+          str+=4;
+        }
       }
-      
-      uidx=pUnicode->GetUnicode(lidx);
     }
     
-    pFont->DrawFont((CglCanvas*)this,dx,dy,uidx);
-    dx+=pFont->GetFontWidth(uidx);
+    w+=pFont->GetFontWidth(uc);
   }
-}
-
-void CglCanvas::TextOutW(const int x,const int y,const TglUnicode *str) const
-{
-  int dx=x;
-  int dy=y;
   
-  CglFont *pFont=(CglFont*)pCglFont;
-  
-  while(*str!=0){
-    pFont->DrawFont((CglCanvas*)this,dx,dy,*str);
-    dx+=pFont->GetFontWidth(*str);
-  }
+  return(w);
 }
 
 void CglCanvas::SetCglFont(void *_pCglFont)
@@ -372,15 +486,6 @@ void CglCanvas::SetCglFont(void *_pCglFont)
     pCglFont=pCglFontDefault;
     }else{
     pCglFont=_pCglFont;
-  }
-}
-
-void CglCanvas::SetCglUnicode(void *_pCglUnicode)
-{
-  if(_pCglUnicode==NULL){
-    pCglUnicode=pCglUnicodeDefault;
-    }else{
-    pCglUnicode=_pCglUnicode;
   }
 }
 
@@ -393,24 +498,56 @@ void CglCanvas::BitBlt(CglCanvas *pDestCanvas,const int nDestLeft,const int nDes
   }
 }
 
-void CglCanvas::BitBltBeta(CglCanvas *pDestCanvas,const int nDestLeft,const int nDestTop,const int nWidth,const int nHeight,const int nSrcLeft,const int nSrcTop) const
+void CglCanvas::BitBltBeta(CglCanvas *pDestCanvas,int nDestLeft,int nDestTop,int nWidth,int nHeight,int nSrcLeft,int nSrcTop) const
 {
-  int w=nWidth;
-  int h=nHeight;
+  int dstw=pDestCanvas->GetWidth();
+  int dsth=pDestCanvas->GetHeight();
+  
+  if(nDestLeft<0){
+    nWidth-=-nDestLeft;
+    nSrcLeft+=-nDestLeft;
+    nDestLeft=0;
+  }
+  
+  if(nDestTop<0){
+    nHeight-=-nDestTop;
+    nSrcTop+=-nDestTop;
+    nDestTop=0;
+  }
+  
+  if(nWidth<=0) return;
+  if(nHeight<=0) return;
   
   if(Width<=nSrcLeft) return;
   if(Height<=nSrcTop) return;
   
-  if(Width<(nSrcLeft+w)) w=Width-nSrcLeft;
-  if(Height<(nSrcTop+h)) h=Height-nSrcTop;
+  if(Width<(nSrcLeft+nWidth)) nWidth=Width-nSrcLeft;
+  if(Height<(nSrcTop+nHeight)) nHeight=Height-nSrcTop;
   
-  u16 *pdata=&VRAMBuf[nSrcLeft+(nSrcTop*Width)];
+  if(dstw<=nDestLeft) return;
+  if(dsth<=nDestTop) return;
   
-  for(int y=0;y<h;y++){
-    for(int x=0;x<w;x++){
-      pDestCanvas->SetPixel(nDestLeft+x,nDestTop+y,pdata[x]);
+  if(dstw<(nDestLeft+nWidth)) nWidth=dstw-nDestLeft;
+  if(dsth<(nDestTop+nHeight)) nHeight=dsth-nDestTop;
+  
+  u16 *psrcbuf=&VRAMBuf[nSrcLeft+(nSrcTop*Width)];
+  u32 srcw=Width;
+  u16 *pdstbuf=&pDestCanvas->GetScanLine(nDestTop)[nDestLeft];
+  
+  u32 len=nWidth*2;
+  
+  if( (((u32)psrcbuf&3)==0) && (((u32)pdstbuf&3)==0) && ((len&3)==0) ){
+    for(u32 y=0;y<(u32)nHeight;y++){
+      glMemCopy32CPU(psrcbuf,pdstbuf,len);
+      psrcbuf+=srcw;
+      pdstbuf+=dstw;
     }
-    pdata+=Width;
+    }else{
+    for(u32 y=0;y<(u32)nHeight;y++){
+      glMemCopy16CPU(psrcbuf,pdstbuf,len);
+      psrcbuf+=srcw;
+      pdstbuf+=dstw;
+    }
   }
 }
 
@@ -437,4 +574,95 @@ void CglCanvas::BitBltTrans(CglCanvas *pDestCanvas,const int nDestLeft,const int
     pdata+=Width;
   }
 }
+
+void CglCanvas::BitBltFullBeta(CglCanvas *pDestCanvas) const
+{
+  glMemCopy32CPU(VRAMBuf,pDestCanvas->GetVRAMBuf(),Width*Height*2);
+}
+
+#define add8(d) { pbuf[ofs]=d; ofs++; }
+#define add16(d) { pbuf[ofs+0]=(u8)((d>>0)&0xff); pbuf[ofs+1]=(u8)((d>>8)&0xff); ofs+=2; }
+#define add32(d) { pbuf[ofs+0]=(u8)((d>>0)&0xff); pbuf[ofs+1]=(u8)((d>>8)&0xff); pbuf[ofs+2]=(u8)((d>>16)&0xff); pbuf[ofs+3]=(u8)((d>>24)&0xff); ofs+=4; }
+
+u8* CglCanvas::CreateBMPImage(u32 *size) const
+{
+//  glDebugPrintf("CglCanvas::CreateBMPImage: Deleted function.\n"); ShowLogHalt();
+  
+  u32 linelen;
+  
+  linelen=Width*3;
+  linelen=(linelen+3)&(~3);
+  
+  u32 bufsize=14+40+(Height*linelen);
+  u8 *pbuf=(u8*)malloc(bufsize);
+  if(pbuf==NULL){
+    glDebugPrintf("memory overflow!! CreateBMPImage. malloc(%d)=NULL;\n",bufsize);
+    *size=0;
+    return(NULL);
+  }
+  
+  u32 ofs=0;
+  
+  // BITMAPFILEHEADER
+  
+  // bfType 2 byte ファイルタイプ 'BM' - OS/2, Windows Bitmap
+  add8((u8)'B');
+  add8((u8)'M');
+  // bfSize 4 byte ファイルサイズ (byte)
+  add32(bufsize);
+  // bfReserved1 2 byte 予約領域 常に 0
+  add16(0);
+  // bfReserved2 2 byte 予約領域 常に 0
+  add16(0);
+  // bfOffBits 4 byte ファイル先頭から画像データまでのオフセット (byte)
+  add32(14+40);
+  
+  // BITMAPINFOHEADER
+  
+  // biSize 4 byte 情報ヘッダのサイズ (byte) 40
+  add32(40);
+  // biWidth 4 byte 画像の幅 (ピクセル)
+  add32(Width);
+  // biHeight 4 byte 画像の高さ (ピクセル) biHeight の値が正数なら，画像データは下から上へ
+  add32(Height);
+  // biPlanes 2 byte プレーン数 常に 1
+  add16(1);
+  // biBitCount 2 byte 1 画素あたりのデータサイズ (bit)
+  add16(24);
+  // biCopmression 4 byte 圧縮形式 0 - BI_RGB (無圧縮)
+  add32(0);
+  // biSizeImage 4 byte 画像データ部のサイズ (byte) 96dpi ならば3780
+  add32(0);
+  // biXPixPerMeter 4 byte 横方向解像度 (1mあたりの画素数) 96dpi ならば3780
+  add32(0);
+  // biYPixPerMeter 4 byte 縦方向解像度 (1mあたりの画素数) 96dpi ならば3780
+  add32(0);
+  // biClrUsed 4 byte 格納されているパレット数 (使用色数) 0 の場合もある
+  add32(0);
+  // biCirImportant 4 byte 重要なパレットのインデックス 0 の場合もある
+  add32(0);
+  
+  for(int y=Height-1;0<=y;y--){
+    u16 *psrcbm=&VRAMBuf[y*Width];
+    for(int x=0;x<Width;x++){
+      u16 col=*psrcbm++;
+      u8 b=(col>>10)&0x1f;
+      u8 g=(col>>5)&0x1f;
+      u8 r=(col>>0)&0x1f;
+      add8(b<<3);
+      add8(g<<3);
+      add8(r<<3);
+    }
+    for(u32 x=0;x<(linelen-(Width*3));x++){
+      add8(0);
+    }
+  }
+  
+  *size=bufsize;
+  return(pbuf);
+}
+
+#undef add8
+#undef add16
+#undef add32
 

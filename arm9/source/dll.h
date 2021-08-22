@@ -4,6 +4,10 @@
 
 #include "plugin.h"
 
+#define MakeExt32(c0,c1,c2,c3) ( ((u32)(c0)<<24) | ((u32)(c1)<<16) | ((u32)(c2)<<8) | ((u32)(c3)<<0) )
+
+#define PluginHeader_ExtCount (16)
+
 typedef struct {
   u32 ID;
   u8 VersionHigh;
@@ -20,8 +24,8 @@ typedef struct {
   u32 FreeLibrary;
   u32 QueryInterfaceLibrary;
   u32 Dummy1;
-  u32 ext[4];
-  char info[64];
+  u32 ext[PluginHeader_ExtCount];
+  char info[256-112];
 } TPluginHeader;
 
 typedef struct {
@@ -35,27 +39,20 @@ typedef struct {
   int (*QueryInterfaceLibrary)(void);
   const TPlugin_ImageLib *pIL;
   const TPlugin_SoundLib *pSL;
-  const TPlugin_ClockLib *pCL;
-  
-  char *INIData;
-  int INISize;
-  int BINFileHandle;
-  void *BINData;
-  int BINSize;
 } TPluginBody;
 
 extern bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize);
 extern void DLL_FreeLibrary(TPluginBody *pPB,bool callfree);
 
-void DLLList_Regist(char *fn);
-void DLLList_Init(void);
-EPluginType DLLList_GetPluginFilename(char *extstr,char *resfn);
-EPluginType DLLList_GetClockPluginFilename(int idx,char *resfn);
-TPluginBody* DLLList_LoadPlugin(char *fn);
-void DLLList_FreePlugin(TPluginBody *pPB);
-
-char *Plugin_GetINIData(void);
-int Plugin_GetINISize(void);
+extern void DLLList_Regist(char *fn);
+extern void DLLList_Init(void);
+extern EPluginType DLLList_isSupportFormatFromExt(const char *ExtStr);
+extern EPluginType DLLList_isSupportFormatFromFilenameUnicode(const UnicodeChar *pFilenameUnicode);
+extern EPluginType DLLList_isSupportFormatFromFilenameAlias(const char *pFilenameAlias);
+extern EPluginType DLLList_isSupportFormatExt32(u32 Ext32);
+extern EPluginType DLLList_GetPluginFilename(const char *extstr,char *resfn);
+extern TPluginBody* DLLList_LoadPlugin(const char *fn);
+extern void DLLList_FreePlugin(TPluginBody *pPB);
 
 #define PluginFilenameMax (16)
 

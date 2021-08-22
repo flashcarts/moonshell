@@ -19,12 +19,14 @@
  project at chishm@hotmail.com
 */
 
+#define CODE_IN_RebootLoader __attribute__ ((section (".RebootLoader")))
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Firmware stuff
 
 #define FW_READ        0x03
 
-__attribute__((noinline)) static void readFirmware(uint32 address, uint32 size, uint8 * buffer) {
+static CODE_IN_RebootLoader void _readFirmware(uint32 address, uint32 size, uint8 * buffer) {
   uint32 index;
 
   // Read command
@@ -56,7 +58,7 @@ Written by Darkain.
 Modified by Chishm:
  * Added STMIA clear mem loop
 --------------------------------------------------------------------------*/
-__attribute__((noinline)) static void resetMemory_ARM7 (void)
+static CODE_IN_RebootLoader void resetMemory_ARM7 (void)
 {
 	u32 i;
 	u8 settings1, settings2;
@@ -94,78 +96,87 @@ __attribute__((noinline)) static void resetMemory_ARM7 (void)
   }
 
 	//switch to user mode
-  __asm volatile(
-	"mov r6, #0x1F                \n"
-	"msr cpsr, r6                 \n"
-	:
-	:
-	: "r6"
-	);
+	u32 r0;
+  __asm {
+	  mov r0, #0x1F
+	  msr cpsr, r0
+	}
 
-#if 0
-  __asm volatile (
-	// clear exclusive IWRAM
-	// 0380:0000 to 0380:FFFF, total 64KiB
-	"mov r0, #0 				\n"	
-	"mov r1, #0 				\n"
-	"mov r2, #0 				\n"
-	"mov r3, #0 				\n"
-	"mov r4, #0 				\n"
-	"mov r5, #0 				\n"
-	"mov r6, #0 				\n"
-	"mov r7, #0 				\n"
-	"mov r8, #0x03800000		\n"	// Start address 
-	"mov r9, #0x03800000		\n" // End address part 1
-	"orr r9, r9, #0x10000		\n" // End address part 2
-	"clear_EIWRAM_loop:			\n"
-	"stmia r8!, {r0, r1, r2, r3, r4, r5, r6, r7} \n"
-	"cmp r8, r9					\n"
-	"blt clear_EIWRAM_loop		\n"
-	:
-	:
-	: "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"
-	);
-#endif
-
-  __asm volatile (
-	// clear most of EWRAM - except after 0x023FF800, which has DS settings
-	"mov r8, #0x02000000		\n"	// Start address part 1 
-	"orr r8, r8, #0x8000		\n" // Start address part 2
-	"mov r9, #0x02300000		\n" // End address part 1
-	"orr r9, r9, #0xff000		\n" // End address part 2
-	"orr r9, r9, #0x00800		\n" // End address part 3
-	"clear_EXRAM_loop:			\n"
-	"stmia r8!, {r0, r1, r2, r3, r4, r5, r6, r7} \n"
-	"cmp r8, r9					\n"
-	"blt clear_EXRAM_loop		\n"
-	:
-	:
-	: "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9"
-	);
-  
 	REG_IE = 0;
 	REG_IF = ~0;
 	(*(vu32*)(0x04000000-4)) = 0;  //IRQ_HANDLER ARM7 version
 	(*(vu32*)(0x04000000-8)) = ~0; //VBLANK_INTR_WAIT_FLAGS, ARM7 version
-	POWER_CR = 1;  //turn off power to stuffs
+	REG_POWERCNT = 1;  //turn off power to stuffs
 	
 	// Reload DS Firmware settings
-	readFirmware((u32)0x03FE70, 0x1, &settings1);
-	readFirmware((u32)0x03FF70, 0x1, &settings2);
+	_readFirmware((u32)0x03FE70, 0x1, &settings1);
+	_readFirmware((u32)0x03FF70, 0x1, &settings2);
 	
 	if (settings1 > settings2) {
-		readFirmware((u32)0x03FE00, 0x70, (u8*)0x027FFC80);
+		_readFirmware((u32)0x03FE00, 0x70, (u8*)0x027FFC80);
 	} else {
-		readFirmware((u32)0x03FF00, 0x70, (u8*)0x027FFC80);
+		_readFirmware((u32)0x03FF00, 0x70, (u8*)0x027FFC80);
 	}
 }
 
-static void boot_GBAROM(void)
+__attribute__ ((noinline)) static CODE_IN_RebootLoader void reboot(ERESET RESET)
 {
-		resetMemory_ARM7();
-		
 		REG_IME = IME_DISABLE;	// Disable interrupts
 		REG_IF = REG_IF;	// Acknowledge interrupt
-		*((vu32*)0x027FFE34) = (u32)0x08000000;	// Bootloader start address
-		swiSoftReset();	// Jump to boot loader
+		
+    while(IPC6->RESET_BootAddress==0){
+  		_console_ReenabledGBABUS();
+	    _consolePrint("wait for IPC6->RESET_BootAddress.\n");
+			for(vu32 w=0;w<0x100;w++){
+			}
+	  }
+	  
+		_console_ReenabledGBABUS();
+		_consolePrintf("reboot(%d);\n",RESET);
+	  
+    _consolePrintf("resetMemory_ARM7();\n");
+    resetMemory_ARM7();
+    
+	  switch(RESET){
+	    case RESET_NULL: {
+  	    _consolePrintf("IPC6->RESET == RESET_Null. relational error.\n");
+  	    while(1);
+	    } break;
+			case RESET_HomeBrew: {
+			  _consolePrintf("Stack base = 0x%08x.\n",__current_sp());
+			  
+  	    _consolePrintf("Reboot ARM7 to 0x%08x.\n",IPC6->RESET_BootAddress);
+        *((vu32*)0x027FFE34) = IPC6->RESET_BootAddress;	// Bootloader start address
+  	
+        if(1){ // Final stage: Clear ARM7 internal memory.
+          u32 *startadr=(u32*)0x037f8000;
+    	    u32 *endadr=(u32*)(__current_sp()-0x100);
+	        while(startadr!=endadr){
+  	        *startadr++=0;
+    	    }
+  	    }
+  
+	      { // Clear IPC area.
+	        vu32 *pbuf=(vu32*)0x027ff000;
+	        for(u32 idx=0;idx<256/4;idx++){
+	          *pbuf++=0;
+	        }
+	      }
+	      
+/*
+        *((vu32*)0x027FFE24) = arm9_entry_addr; // Set ARM9 Loop address
+        
+        void (*jump)(void)=(void(*)(void))arm7_entry_addr;
+        jump();
+        while(1);
+*/
+        
+     		// Jump to boot loader
+     		asm {
+          swi 0<<16
+     		}
+  	    while(1);
+			} break;
+	  }
+		
 }

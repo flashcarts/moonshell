@@ -1,7 +1,0 @@
-frame.c
-  if (mad_layer_III(stream, frame) == -1) {
-
-
-(header->flags & MAD_FLAG_LSF_EXT)‚Íí‚Éfalse
-header->layer‚Íí‚É3
-

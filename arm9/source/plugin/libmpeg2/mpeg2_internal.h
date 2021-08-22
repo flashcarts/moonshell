@@ -25,6 +25,10 @@
  * $Id: mpeg2_internal.h,v 1.21 2005/02/19 02:32:12 diego Exp $
  */
 
+#define ATTR_ALIGN16 __align(16)
+#define ATTR_ALIGN32 __align(32)
+#define ATTR_ALIGN64 __align(64)
+
 /* macroblock modes */
 #define MACROBLOCK_INTRA 1
 #define MACROBLOCK_PATTERN 2
@@ -78,81 +82,100 @@ struct mpeg2_decoder_s {
     int bitstream_bits;			/* used bits in working set */
     const uint8_t * bitstream_ptr;	/* buffer with stream data */
 
-    uint8_t * dest[3];
+    uint8_t * dest[3]; // for slice.c
 
-    int offset;
-    int stride;
-    int uv_stride;
-    int slice_stride;
-    int slice_uv_stride;
-    int stride_frame;
-    unsigned int limit_x;
+    int offset; // for slice.c
+    int stride; // for slice.c
+    int uv_stride; // for slice.c
+    int slice_stride; // for slice.c
+    int slice_uv_stride; // for slice.c
+    // int stride_frame; // for slice.c one call
+    unsigned int limit_x; // for slice.c
     unsigned int limit_y_16;
-    unsigned int limit_y_8;
-    unsigned int limit_y;
+    // unsigned int limit_y_8;
+    unsigned int limit_y; // for slice.c
 
     /* Motion vectors */
     /* The f_ and b_ correspond to the forward and backward motion */
     /* predictors */
-    motions_t *motions;
-    motion_parser_t * motion_parser[5];
+    motions_t *motions; // for slice.c
+    //motion_parser_t * motion_parser[5]; // for slice.c little call
 
     /* predictor for DC coefficients in intra blocks */
-    int16_t dc_dct_pred[3];
+    int16_t dc_dct_pred[3]; // for slice.c
 
-    uint8_t * picture_dest[3];
+    // uint8_t * picture_dest[3]; // for slice.c one call
     void (* convert) (void * convert_id, uint8_t * const * src,
 		      unsigned int v_offset);
     void * convert_id;
 
 //    int dmv_offset;
-    unsigned int v_offset;
+    unsigned int v_offset; // for slice.c
 
     /* now non-slice-specific information */
 
     /* sequence header stuff */
-    uint16_t * quantizer_matrix[2]; // old4
-    uint16_t (* chroma_quantizer[2])[64];
-    uint16_t (*quantizer_prescale[4])[32][64];
+    uint16_t * quantizer_matrix[2]; // old4 for slice.c
+    //uint16_t (* chroma_quantizer[2])[64]; // for header.c
+    //uint16_t (*quantizer_prescale[4])[32][64]; // for slice.c one call
 
     /* The width and height of the picture snapped to macroblock units */
-    int width;
-    int height;
-    int vertical_position_extension;
+    int width; // for slice.c
+    //int height; // for slice.c init
+    //int vertical_position_extension; // for slice.c init
     int chroma_format;
 
     /* picture header stuff */
 
     /* what type of picture this is (I, P, B, D) */
-    int coding_type;
+    int coding_type; // for slice.c
 
     /* picture coding extension stuff */
 
     /* quantization factor for intra dc coefficients */
-    int intra_dc_precision;
+    int intra_dc_precision; // for slice.c
     /* top/bottom/both fields */
-    int picture_structure;
+    int picture_structure; // for slice.c
     /* bool to indicate all predictions are frame based */
-    int frame_pred_frame_dct;
+    int frame_pred_frame_dct; // for slice.c
     /* bool to indicate whether intra blocks have motion vectors */
     /* (for concealment) */
-    int concealment_motion_vectors;
+    int concealment_motion_vectors; // for slice.c
     /* bool to use different vlc tables */
 //    int intra_vlc_format;
     /* used for DMV MC */
-    int top_field_first;
+    // int top_field_first; // for header.c
 
     /* stuff derived from bitstream */
 
     /* pointer to the zigzag scan we're supposed to be using */
     const uint8_t * scan;
 
+    // moved for optimize
+    
+    int stride_frame; // for slice.c one call
+    
+    motion_parser_t * motion_parser[5]; // for slice.c little call
+    
+    uint8_t * picture_dest[3]; // for slice.c one call
+
+    /* The width and height of the picture snapped to macroblock units */
+    int height; // for slice.c init
+    int vertical_position_extension; // for slice.c init
+    
+    /* sequence header stuff */
+    uint16_t (* chroma_quantizer[2])[64]; // for header.c
+    uint16_t (*quantizer_prescale[4])[32][64]; // for slice.c one call
+    
+    /* used for DMV MC */
+    int top_field_first; // for header.c
+    
 //    int second_field;
 
 //    int mpeg1;
 
     /* DCT coefficients */
-    int16_t DCTblock[64] ATTR_ALIGN(64);
+    int16_t DCTblock[64];
 
     /* for MPlayer: */
 /*
@@ -209,7 +232,7 @@ struct mpeg2dec_s {
     mpeg2_picture_t * picture;
     /*const*/ mpeg2_fbuf_t * fbuf[3];	/* 0: current fbuf, 1-2: prediction fbufs */
 
-    fbuf_alloc_t fbuf_alloc[3];
+    fbuf_alloc_t fbuf_alloc[3]; // offset 500byte
     int custom_fbuf;
 
     uint8_t * yuv_buf[3][3];
@@ -222,10 +245,10 @@ struct mpeg2dec_s {
 			    const mpeg2_picture_t * picture,
 			    const mpeg2_gop_t * gop);
 
+    int16_t display_offset_x, display_offset_y;
+
     uint8_t * buf_start;
     uint8_t * buf_end;
-
-    int16_t display_offset_x, display_offset_y;
 
     int copy_matrix;
     int8_t q_scale_type, scaled[4];
@@ -238,19 +261,6 @@ struct mpeg2dec_s {
     int pending_length;
 */
 };
-
-typedef struct {
-#ifdef ARCH_PPC
-    uint8_t regv[12*16];
-#endif
-    int dummy;
-} cpu_state_t;
-
-/* cpu_accel.c */
-uint32_t mpeg2_detect_accel (void);
-
-/* cpu_state.c */
-void mpeg2_cpu_state_init (uint32_t accel);
 
 /* decode.c */
 mpeg2_state_t mpeg2_seek_header (mpeg2dec_t * mpeg2dec);
@@ -315,11 +325,4 @@ typedef struct {
 };
 
 extern mpeg2_mc_t mpeg2_mc_c;
-extern mpeg2_mc_t mpeg2_mc_mmx;
-extern mpeg2_mc_t mpeg2_mc_mmxext;
-extern mpeg2_mc_t mpeg2_mc_3dnow;
-extern mpeg2_mc_t mpeg2_mc_altivec;
-extern mpeg2_mc_t mpeg2_mc_alpha;
-extern mpeg2_mc_t mpeg2_mc_vis;
-
 extern mpeg2_mc_t mpeg2_mc_arm;

@@ -25,12 +25,12 @@
  * $Id: attributes.h,v 1.7 2005/02/19 02:32:12 diego Exp $
  */
 
-/* use gcc attribs to align critical data structures */
-#ifdef ATTRIBUTE_ALIGNED_MAX
-#define ATTR_ALIGN(align) __attribute__ ((__aligned__ ((ATTRIBUTE_ALIGNED_MAX < align) ? ATTRIBUTE_ALIGNED_MAX : align)))
-#else
-#define ATTR_ALIGN(align) __attribute__ ((__aligned__ ((16 < align) ? 16 : align)))
-#endif
+#ifndef MPEG2_ATTRIBUTES
+#define MPEG2_ATTRIBUTES
+
+#define ATTR_ALIGN16 __align(16)
+#define ATTR_ALIGN32 __align(32)
+#define ATTR_ALIGN64 __align(64)
 
 #ifdef HAVE_BUILTIN_EXPECT
 #define likely(x) __builtin_expect ((x) != 0, 1)
@@ -38,4 +38,6 @@
 #else
 #define likely(x) (x)
 #define unlikely(x) (x)
+#endif
+
 #endif

@@ -2,24 +2,7 @@
 #ifndef _const_h
 #define _const_h
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void ShowLogHalt(void);
-void videoSetModeSub_SetShowLog(bool e);
-bool CheckITCM(void);
-
-#ifdef __cplusplus
-}	   // extern "C"
-#endif
-
-#define ScreenWidth (256)
-#define ScreenHeight (192)
-
-//#define attrinline __attribute__ ((always_inline, const)) static inline 
-#define attrinline __attribute__ ((always_inline)) static inline 
-//#define attrinline 
+extern __declspec(noreturn) void ShowLogHalt(void);
 
 #define BIT0 (1<<0)
 #define BIT1 (1<<1)
@@ -37,36 +20,47 @@ bool CheckITCM(void);
 #define BIT13 (1<<13)
 #define BIT14 (1<<14)
 #define BIT15 (1<<15)
+#define BIT16 (1<<16)
+#define BIT17 (1<<17)
+#define BIT18 (1<<18)
+#define BIT19 (1<<19)
+#define BIT20 (1<<20)
+#define BIT21 (1<<21)
+#define BIT22 (1<<22)
+#define BIT23 (1<<23)
+#define BIT24 (1<<24)
+#define BIT25 (1<<25)
+#define BIT26 (1<<26)
+#define BIT27 (1<<27)
+#define BIT28 (1<<28)
+#define BIT29 (1<<29)
+#define BIT30 (1<<30)
+#define BIT31 (1<<31)
 
-typedef s32 sfix5; // 8.5bitŒÅ’è¬”
-typedef u32 ufix5; // 8.5bitŒÅ’è¬”
+#define ScreenWidth (256)
+#define ScreenHeight (192)
 
-#define UFIX5SHIFT (5)
-#define SFIX5VALUE (0x20)
+//#define attrinline __attribute__ ((always_inline, const)) static inline 
+#define attrinline __attribute__ ((always_inline)) static inline 
+//#define attrinline 
 
-typedef s32 sfix6; // 8.6bitŒÅ’è¬”
-typedef u32 ufix6; // 8.6bitŒÅ’è¬”
-
-#define UFIX6SHIFT (6)
-#define SFIX6VALUE (0x40)
-
-typedef s32 sfix8; // 8.8bitŒÅ’è¬”
-typedef u32 ufix8; // 8.8bitŒÅ’è¬”
-
-#define UFIX8SHIFT (8)
-#define SFIX8VALUE (0x100)
-
-typedef s32 sfix16; // 8.16bitŒÅ’è¬”
-typedef u32 ufix16; // 8.16bitŒÅ’è¬”
-
-#define UFIX16SHIFT (16)
-#define SFIX16VALUE (0x10000)
-
-typedef s32 sfix24; // 8.24bitŒÅ’è¬”
-typedef u32 ufix24; // 8.24bitŒÅ’è¬”
-
-#define UFIX24SHIFT (24)
-#define SFIX24VALUE (0x1000000)
+/*
+static void ExeclusiveWaitForPressButton(void)
+{
+  u16 KEYS_CUR;
+  
+  KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
+  while(KEYS_CUR!=0){
+    KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
+  }
+  while(KEYS_CUR==0){
+    KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
+  }
+  while(KEYS_CUR!=0){
+    KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
+  }
+}
+*/
 
 #endif
 

@@ -10,6 +10,15 @@
 
 CglB15::CglB15(const u8 *_buf,const int _size)
 {
+  if(_buf==NULL){
+    u32 size=_size;
+    Width=(size>>0)&0xffff;
+    Height=(size>>16)&0xffff;
+    data=(u16*)glsafemalloc(Height*Width*sizeof(u16));
+    pCanvas=new CglCanvas(&data[0],Width,Height,pf15bit);
+    return;
+  }
+  
   CglStream stream(_buf,_size);
   
   Width=stream.Readu16();
@@ -20,6 +29,8 @@ CglB15::CglB15(const u8 *_buf,const int _size)
     }else{
     TransFlag=true;
   }
+  
+  stream.Readu16();
   
   data=(u16*)glsafemalloc(Height*Width*sizeof(u16));
   

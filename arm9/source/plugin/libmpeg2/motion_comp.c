@@ -27,22 +27,21 @@
 
 #include "config.h"
 
-#include <inttypes.h>
+#include "inttypes.h"
 
 #include "mpeg2.h"
 #include "attributes.h"
 #include "mpeg2_internal.h"
 
-#include "../../arm9tcm.h"
-
-mpeg2_mc_t mpeg2_mc;
+DATA_IN_MTCM_SET mpeg2_mc_t mpeg2_mc;
 
 void mpeg2_mc_init (uint32_t accel)
 {
-	mpeg2_mc = mpeg2_mc_c;
+//	mpeg2_mc = mpeg2_mc_c;
+	mpeg2_mc = mpeg2_mc_arm;
 }
 
-#if 1
+#if 0
 
 #define avg2(a,b) ((a+b+1)>>1)
 #define avg4(a,b,c,d) ((a+b+c+d+2)>>2)

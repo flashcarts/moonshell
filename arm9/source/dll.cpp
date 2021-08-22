@@ -6,140 +6,191 @@
 
 #include <NDS.h>
 
-#include "emulator.h"
 #include "_const.h"
 #include "_console.h"
-#include "filesys.h"
+#include "_consoleWriteLog.h"
+#include "fat2.h"
 #include "memtool.h"
-#include "mwin.h"
 #include "shell.h"
-#include "extmem.h"
-#include "formdt.h"
+#include "splash.h"
 
 #include "dll.h"
 
-extern char *Plugin_GetINIData(void);
-extern int Plugin_GetINISize(void);
-extern void *Plugin_GetBINData(void);
-extern int Plugin_GetBINSize(void);
-extern int Plugin_GetBINFileHandle(void);
-extern int Plugin_msp_fopen(const char *fn);
-extern bool Plugin_msp_fclose(int fh);
+static long int FileSys_ftell (int hFile)
+{
+  return(FAT2_ftell((FAT_FILE*)hFile));
+}
 
-#ifdef ShowDebugMsg
-#else
-static void _consolePrint_dummy(const char* s)
+static int FileSys_fseek(int hFile, u32 offset, int origin)
 {
+  return(FAT2_fseek((FAT_FILE*)hFile,offset,origin));
 }
-static void _consolePrintf_dummy(const char* format, ...)
+
+static u32 FileSys_fread (void* buffer, u32 size, u32 count, int hFile)
 {
+//  _consolePrintf("fread:0x%x,%d -> 0x%08x\n",FAT2_ftell((FAT_FILE*)hFile),size*count,buffer);
+  u32 res=FAT2_fread(buffer,size,count,(FAT_FILE*)hFile);
+
+  return(res);
+    
+  char* data = (char*)buffer;
+  for(u32 idx=0;idx<32;idx++){
+    _consolePrintf("%02x,",data[idx]);
+  }
+  _consolePrint("\n");
+  
+  return(res);
 }
-#endif
+
+static void* _memchr(const void *buf, int ch, size_t n)
+{
+  return((void*)memchr(buf,ch,n));
+}
+
+static char* _strchr(const char *s, int c)
+{
+  return((char*)strchr(s,c));
+}
+
+static char* _strdup(const char *s)
+{
+  return(NULL);
+  //return((char*)strdup(s));
+}
+
+static char* _strpbrk(const char *s, const char *accept)
+{
+  return((char*)strpbrk(s,accept));
+}
+
+static char* _strrchr(const char *s, int c)
+{
+  return((char*)strrchr(s,c));
+}
+
+static char* _strsep(char **stringp, const char *delim)
+{
+  return(NULL);
+  //return((char*)strsep(stringp,delim));
+}
+
+static char* _strstr(const char *haystack, const char *needle)
+{
+  return((char*)strstr(haystack,needle));
+}
+
+#define PluginGardMemorySize (256*1024)
+
+static void* _safemalloc(int size)
+{
+  void *p=malloc(size+PluginGardMemorySize);
+  
+  if(p!=NULL){
+    free(p);
+//    _consolePrintf("safemalloc(%d) ok. ",size);
+    return(safemalloc(size));
+  }
+  
+  PrintFreeMem();
+  _consolePrintf("safemalloc(%d) fail. ",size);
+  return(NULL);
+}
+
+static void* _calloc(size_t nmemb, size_t size)
+{
+  void *p=calloc(nmemb+(PluginGardMemorySize/size),size);
+  
+  if(p!=NULL){
+    free(p);
+//    _consolePrintf("calloc(%d,%d) ok. ",nmemb,size);
+    return(calloc(nmemb,size));
+  }
+  
+  PrintFreeMem();
+  _consolePrintf("calloc(%d,%d) fail. ",nmemb,size);
+  return(NULL);
+}
+
+static void* _malloc(size_t size)
+{
+  void *p=malloc(size+PluginGardMemorySize);
+  
+  if(p!=NULL){
+    free(p);
+//    _consolePrintf("malloc(%d) ok. ",size);
+    return(malloc(size));
+  }
+  
+  PrintFreeMem();
+  _consolePrintf("malloc(%d) fail. ",size);
+  return(NULL);
+}
+
+static void* _realloc(void *ptr, size_t size)
+{
+  return(realloc(ptr,size));
+  
+  ptr=realloc(ptr,size+PluginGardMemorySize);
+  
+  if(ptr!=NULL){
+    ptr=realloc(ptr,size);
+    if(ptr!=NULL){
+//      _consolePrintf("realloc(,%d) %08x ok. ",ptr,size);
+      return(ptr);
+    }
+  }
+  
+  PrintFreeMem();
+  _consolePrintf("realloc(%08x,%d) fail. ",ptr,size);
+  return(NULL);
+}
+
+static void MWin_ProgressShow(char *TitleStr,s32 _Max)
+{
+  _consolePrintf("PrgShow: %s,%d\n",TitleStr,_Max);
+}
+
+static void MWin_ProgressSetPos(s32 _Position)
+{
+  _consolePrintf("PrgSetPos: %d\n",_Position);
+}
+
+static void MWin_ProgressHide(void)
+{
+  _consolePrintf("PrgHide: ok.\n");
+}
 
 static inline const TPlugin_StdLib *Plugin_GetStdLib(void)
 {
   static TPlugin_StdLib sPlugin_StdLib={
-#ifdef ShowDebugMsg
-    _consolePrint,
-    _consolePrintf,
-#else
-    _consolePrint_dummy,
-    _consolePrintf_dummy,
-#endif
+    _consolePrint,_consolePrintf,
     _consolePrintSet,
     ShowLogHalt,
-    MWin_ProgressShow,
-    MWin_ProgressSetPos,
-    MWin_ProgressHide,
-    Plugin_GetINIData,
-    Plugin_GetINISize,
-    Plugin_GetBINData,
-    Plugin_GetBINSize,
+    MWin_ProgressShow,MWin_ProgressSetPos,MWin_ProgressHide,
     
-    DC_FlushRangeOverrun,
-    MemCopy8CPU,
-    MemCopy16CPU,
-    MemCopy32CPU,
-    MemSet16CPU,
-    MemSet32CPU,
-    MemCopy16DMA3,
-    MemCopy32DMA3,
-    MemSet16DMA3,
-    MemSet32DMA3,
-    MemSet8DMA3,
-    MemCopy16DMA2,
-    MemSet16DMA2,
-    MemCopy32swi256bit,
-    safemalloc,
-    safefree,
+    MemCopy8CPU,MemCopy16CPU,MemCopy32CPU,
+    MemSet16CPU,MemSet32CPU,
+    _safemalloc,safefree,
     
-    calloc,
-    malloc,
-    free,
-    realloc,
-    
+    _calloc,_malloc,free,_realloc,
     rand,
+    FileSys_fread,FileSys_fseek,FileSys_ftell,
+    sprintf,snprintf,
+    _memchr,memcmp,memcpy,memmove,memset,
+    abs,labs,llabs,fabs,fabsf,
+    atof,atoi,atol,atoll,
+    strcat,_strchr,strcmp,strcoll,strcpy,strcspn,_strdup,strlen,strncat,strncmp,strncpy,_strpbrk,_strrchr,_strsep,strspn,_strstr,strtok,strxfrm,
     
-    FileSys_fread,
-    FileSys_fseek,
-    FileSys_ftell,
-    
-    sprintf,
-    snprintf,
-    
-    memchr,
-    memcmp,
-    memcpy,
-    memmove,
-    memset,
-    
-    abs,
-    labs,
-    llabs,
-    fabs,
-    fabsf,
-    
-    atof,
-    atoi,
-    atol,
-    atoll,
-    
-    strcat,
-    strchr,
-    strcmp,
-    strcoll,
-    strcpy,
-    strcspn,
-    strdup,
-    strlen,
-    strncat,
-    strncmp,
-    strncpy,
-    strpbrk,
-    strrchr,
-    strsep,
-    strspn,
-    strstr,
-    strtok,
-    strxfrm,
-    
-    Plugin_GetBINFileHandle,
-    Plugin_msp_fopen,
-    Plugin_msp_fclose,
-    
-    extmem_SetCount,
-    extmem_Exists,
-    extmem_Alloc,
-    extmem_Write,
-    extmem_Read,
-    
-    formdt_FormatDate
+    0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,
   };
   
   return(&sPlugin_StdLib);
 }
 
-bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
+//#define ShowPluginInfo
+
+bool DLL_LoadLibrary(TPluginBody *pPB,const TPlugin_StdLib *pStdLib,void *pbin,int binsize)
 {
   memset(pPB,0,sizeof(TPluginBody));
   
@@ -148,7 +199,7 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
   memmove(pPH,pbin,sizeof(TPluginHeader));
   
 #ifdef ShowPluginInfo
-  _consolePrintf("MoonShellPlugin Header\n");
+  _consolePrint("MSP Header\n");
   _consolePrintf("ID=%x ver%d.%d\n",pPH->ID,pPH->VersionHigh,pPH->VersionLow);
   {
     char *pts;
@@ -156,7 +207,6 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
       case EPT_None: pts="NULL"; break;
       case EPT_Image: pts="Image"; break;
       case EPT_Sound: pts="Sound"; break;
-      case EPT_Clock: pts="Clock"; break;
       default: pts="undefined"; break;
     }
     _consolePrintf("PluginType=%x %s\n",pPH->PluginType,pts);
@@ -173,7 +223,7 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
     *str++;
     _consolePrintf("Author=%s\n",str);
   }
-  _consolePrintf("\n",0);
+  _consolePrint("\n");
 #endif
   
   pPB->DataSize=binsize;
@@ -184,10 +234,10 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
 #endif
   
   pPB->bssSize=pPH->bssEnd-pPH->bssStart;
-  pPB->pbss=malloc(pPB->bssSize);
+  pPB->pbss=safemalloc(pPB->bssSize);
   
   if(pPB->pbss==NULL){
-    _consolePrintf("LoadLibrary:bss malloc error.\n");
+    _consolePrint("LoadLibrary:bss malloc error.\n");
     DLL_FreeLibrary(pPB,false);
     return(false);
   }
@@ -274,7 +324,7 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
     
     src=pPH->LoadLibrary;
     if(src==0){
-      _consolePrintf("LoadLibrary:BootStrap function is NULL.\n");
+      _consolePrint("LoadLibrary:BootStrap function is NULL.\n");
       DLL_FreeLibrary(pPB,false);
       return(false);
     }
@@ -283,7 +333,7 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
     
     src=pPH->FreeLibrary;
     if(src==0){
-      _consolePrintf("LoadLibrary:BootStrap function is NULL.\n");
+      _consolePrint("FreeLibrary:BootStrap function is NULL.\n");
       DLL_FreeLibrary(pPB,false);
       return(false);
     }
@@ -292,7 +342,7 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
     
     src=pPH->QueryInterfaceLibrary;
     if(src==0){
-      _consolePrintf("LoadLibrary:BootStrap function is NULL.\n");
+      _consolePrint("QueryInterfaceLibrary:BootStrap function is NULL.\n");
       DLL_FreeLibrary(pPB,false);
       return(false);
     }
@@ -300,32 +350,33 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
     *pdst=(u32)pPB->pData+(src-pPH->DataStart);
   }
   
+#ifdef ShowPluginInfo
   _consolePrintf("0x%08x LoadLibrary\n",(u32)pPB->LoadLibrary);
   _consolePrintf("0x%08x FreeLibrary\n",(u32)pPB->FreeLibrary);
   _consolePrintf("0x%08x QueryInterfaceLib.\n",(u32)pPB->QueryInterfaceLibrary);
+#endif
   
   if(pPB->LoadLibrary==NULL){
-    _consolePrintf("LoadLibrary:LoadLibrary() is NULL.\n");
+    _consolePrint("LoadLibrary:LoadLibrary() is NULL.\n");
     DLL_FreeLibrary(pPB,false);
     return(false);
   }
   
-  bool res=pPB->LoadLibrary(Plugin_GetStdLib(),(u32)pPB->pData);
+  bool res=pPB->LoadLibrary(pStdLib,(u32)pPB->pData);
   
   if(res==false){
-    _consolePrintf("LoadLibrary:LoadLibrary() false.\n");
+    _consolePrint("LoadLibrary:LoadLibrary() false.\n");
     DLL_FreeLibrary(pPB,false);
     return(false);
   }
   
-  pPB->pIL=NULL;
   pPB->pSL=NULL;
-  pPB->pCL=NULL;
+  pPB->pIL=NULL;
   
   switch((EPluginType)(pPH->PluginType)){
     case EPT_None: {
 #ifdef ShowPluginInfo
-      _consolePrintf("LoadLibrary:PluginType == None.\n");
+      _consolePrint("LoadLibrary:PluginType == None.\n");
 #endif
       DLL_FreeLibrary(pPB,false);
       return(false);
@@ -342,22 +393,16 @@ bool DLL_LoadLibrary(TPluginBody *pPB,void *pbin,int binsize)
       _consolePrintf("SoundInterfacePtr 0x%08x\n",(u32)pPB->pSL);
 #endif
     } break;
-    case EPT_Clock: {
-      pPB->pCL=(TPlugin_ClockLib*)pPB->QueryInterfaceLibrary();
-#ifdef ShowPluginInfo
-      _consolePrintf("ClockInterfacePtr 0x%08x\n",(u32)pPB->pCL);
-#endif
-    } break;
   }
   
-  if((pPB->pIL==NULL)&&(pPB->pSL==NULL)&&(pPB->pCL==NULL)){
-    _consolePrintf("LoadLibrary:not found function list error.\n");
+  if((pPB->pIL==NULL)&&(pPB->pSL==NULL)){
+    _consolePrint("LoadLibrary:not found function list error.\n");
     DLL_FreeLibrary(pPB,false);
     return(false);
   }
   
 #ifdef ShowPluginInfo
-  _consolePrintf("LoadLibrary:Initialized.\n");
+  _consolePrint("LoadLibrary:Initialized.\n");
 #endif
   
   return(true);
@@ -372,16 +417,16 @@ void DLL_FreeLibrary(TPluginBody *pPB,bool callfree)
   }
   
   if(pPB->pData!=NULL){
-    free(pPB->pData); pPB->pData=NULL;
+    safefree(pPB->pData); pPB->pData=NULL;
   }
   if(pPB->pbss!=NULL){
-    free(pPB->pbss); pPB->pbss=NULL;
+    safefree(pPB->pbss); pPB->pbss=NULL;
   }
   
 //  memset(pPB,0,sizeof(TPluginBody));
   
 #ifdef ShowPluginInfo
-  _consolePrintf("FreeLibrary:Destroied.\n");
+  _consolePrint("FreeLibrary:Destroied.\n");
 #endif
 }
 
@@ -396,11 +441,31 @@ typedef struct {
 static int DLLListCount;
 TDLLList *DLLList=NULL;
 
+static void DLLList_Regist_Dummy(EPluginType PluginType,const char *pext)
+{
+  u32 Ext32=0;
+  {
+    const char *ptmp=pext;
+    while((*ptmp!=0)&&(*ptmp!='.')){
+      u32 ch=*ptmp++;
+      if((0x41<=ch)&&(ch<=0x5a)) ch+=0x20;
+      Ext32=(Ext32>>8)|(ch<<24);
+    }
+    Ext32>>=8;
+  }
+  if(Ext32==0) return;
+  
+  DLLList[DLLListCount].ext=Ext32;
+  DLLList[DLLListCount].PluginType=PluginType;
+  DLLList[DLLListCount].fn[0]=0;
+  DLLListCount++;
+}
+
 void DLLList_Regist(char *fn)
 {
   TPluginHeader PH;
   
-  if(Shell_ReadHeadMSP(fn,&PH,sizeof(TPluginHeader))==false){
+  if(Shell_FAT_ReadHeadMSP(fn,&PH,sizeof(TPluginHeader))==false){
     _consolePrintf("%s file open error.\n",fn);
     return;
   }
@@ -409,7 +474,7 @@ void DLLList_Regist(char *fn)
     _consolePrintf("%s is illigal format.\n",fn);
     return;
   }
-  if(0x04<PH.VersionHigh){
+  if(0x05<PH.VersionHigh){
     _consolePrintf("%s check version error ver%d.%d\n",fn,PH.VersionHigh,PH.VersionLow);
     return;
   }
@@ -419,7 +484,7 @@ void DLLList_Regist(char *fn)
       _consolePrintf("%s Plugin type is EPT_None(0)\n",fn);
     } break;
     case EPT_Image: case EPT_Sound: {
-      for(int idx=0;idx<4;idx++){
+      for(int idx=0;idx<PluginHeader_ExtCount;idx++){
         if(PH.ext[idx]!=0){
           DLLList[DLLListCount].ext=PH.ext[idx];
           DLLList[DLLListCount].PluginType=(EPluginType)PH.PluginType;
@@ -431,63 +496,174 @@ void DLLList_Regist(char *fn)
         }
       }
     } break;
-    case EPT_Clock: {
-      DLLList[DLLListCount].ext=0;
-      DLLList[DLLListCount].PluginType=(EPluginType)PH.PluginType;
-      strncpy(DLLList[DLLListCount].fn,fn,PluginFilenameMax);
-#ifdef ShowPluginInfo
-      _consolePrintf("regist(clk):%2d %s\n",DLLListCount,DLLList[DLLListCount].fn);
-#endif
-      DLLListCount++;
-    }
+    default: {
+      _consolePrintf("unknown plugin type(%d):%2d %s\n",PH.PluginType,DLLListCount,DLLList[DLLListCount].fn);
+    } break;
   }
 }
 
 void DLLList_Init(void)
 {
+  const u32 cntmax=48;
+  DLLListCount=cntmax;
+  
+  DLLList=(TDLLList*)safemalloc(sizeof(TDLLList)*DLLListCount);
+  
   DLLListCount=0;
   
-  char **fnl=Shell_EnumMSP();
+  _consolePrint("Plugin Read headers.\n");
   
-  if(fnl==NULL){
-    _consolePrintf("not found plugin.\n");
-    return;
+  DLLList_Regist_Dummy(EPT_Sound,"mp1");
+  DLLList_Regist_Dummy(EPT_Sound,"mp2");
+  DLLList_Regist_Dummy(EPT_Sound,"mp3");
+  
+  DLLList_Regist_Dummy(EPT_Image,"jpg");
+  DLLList_Regist_Dummy(EPT_Image,"jpe");
+  
+  PrfStart();
+  DLLList_Regist("ogg.msp");
+  DLLList_Regist("spc.msp");
+  DLLList_Regist("wav.msp");
+  DLLList_Regist("tta.msp");
+  DLLList_Regist("mikmod.msp");
+  if(ShellSet.UseM4APlugin==true) DLLList_Regist("m4a.msp");
+  
+  DLLList_Regist("bmp.msp");
+  DLLList_Regist("png.msp");
+  DLLList_Regist("psd.msp");
+  DLLList_Regist("gif.msp");
+  PrfEnd(0);
+  
+  _consolePrintf("Plugin Registed. (%dbyte, %d/%d)\n",sizeof(TDLLList),DLLListCount,cntmax);
+  if(cntmax<DLLListCount){
+    _consolePrintf("Plugin header memory overflow.\n");
+    ShowLogHalt();
   }
-  if(fnl[0]==NULL){
-    _consolePrintf("not found plugin.\n");
-    return;
-  }
-  
-  if(DLLList!=NULL){
-    safefree(DLLList); DLLList=NULL;
-  }
-  
-  {
-    int cnt=0;
-    while(fnl[cnt]!=NULL){
-      cnt++;
-    }
-    if(cnt!=0){
-      DLLList=(TDLLList*)safemalloc(cnt*4*sizeof(TDLLList));
-    }
-  }
-  
-  _consolePrintf("Plugin Read headers.\n");
-  
-  int idx=0;
-  while(fnl[idx]!=NULL){
-    DLLList_Regist(fnl[idx]);
-    free(fnl[idx]); fnl[idx]=NULL;
-    idx++;
-  }
-  
-  free(fnl); fnl=NULL;
-  
-  _consolePrintf("Plugin Registed.\n");
 }
 
-EPluginType DLLList_GetPluginFilename(char *extstr,char *resfn)
+EPluginType DLLList_isSupportFormatFromExt(const char *ExtStr)
 {
+  if((ExtStr==NULL)||(ExtStr[0]==0)) return(EPT_None);
+  
+  u32 ext=0;
+  
+  u32 c;
+  
+  c=(u32)ExtStr[1];
+  if(c!=0){
+    if((0x41<=c)&&(c<0x5a)) c+=0x20;
+    ext|=c << 0;
+    c=(u32)ExtStr[2];
+    if(c!=0){
+      if((0x41<=c)&&(c<0x5a)) c+=0x20;
+      ext|=c << 8;
+      c=(u32)ExtStr[3];
+      if(c!=0){
+        if((0x41<=c)&&(c<0x5a)) c+=0x20;
+        ext|=c << 16;
+        c=(u32)ExtStr[4];
+        if(c!=0){
+          if((0x41<=c)&&(c<0x5a)) c+=0x20;
+          ext|=c << 24;
+        }
+      }
+    }
+  }
+  
+  for(int idx=0;idx<DLLListCount;idx++){
+    if(DLLList[idx].ext==ext){
+      return(DLLList[idx].PluginType);
+    }
+  }
+  
+  return(EPT_None);
+}
+
+EPluginType DLLList_isSupportFormatFromFilenameUnicode(const UnicodeChar *pFilenameUnicode)
+{
+  if((pFilenameUnicode==NULL)||(pFilenameUnicode[0]==0)) return(EPT_None);
+  
+  u32 Ext32=0;
+  {
+    const UnicodeChar *ptmp=pFilenameUnicode;
+    while(*ptmp!=0){
+      u32 ch=*ptmp++;
+      if(ch==(u32)'.'){
+        Ext32=0;
+        }else{
+        if((0x61<=ch)&&(ch<=0x7a)) ch-=0x20;
+        Ext32=(Ext32<<8)|ch;
+      }
+    }
+  }
+  
+  return(DLLList_isSupportFormatExt32(Ext32));
+}
+
+EPluginType DLLList_isSupportFormatFromFilenameAlias(const char *pFilenameAlias)
+{
+  if((pFilenameAlias==NULL)||(pFilenameAlias[0]==0)) return(EPT_None);
+  
+  u32 Ext32=0;
+  {
+    const char *ptmp=pFilenameAlias;
+    while(*ptmp!=0){
+      u32 ch=*ptmp++;
+      if(ch==(u32)'.'){
+        Ext32=0;
+        }else{
+        if((0x61<=ch)&&(ch<=0x7a)) ch-=0x20;
+        Ext32=(Ext32<<8)|ch;
+      }
+    }
+  }
+  
+  return(DLLList_isSupportFormatExt32(Ext32));
+}
+
+EPluginType DLLList_isSupportFormatExt32(u32 Ext32)
+{
+  u32 ext=0;
+  
+  u32 c;
+  
+  c=(Ext32>>0)&0xff;
+  if(c!=0){
+    if((0x41<=c)&&(c<0x5a)) c+=0x20;
+    ext=(ext<<8)|c;
+  }
+  c=(Ext32>>8)&0xff;
+  if(c!=0){
+    if((0x41<=c)&&(c<0x5a)) c+=0x20;
+    ext=(ext<<8)|c;
+  }
+  c=(Ext32>>16)&0xff;
+  if(c!=0){
+    if((0x41<=c)&&(c<0x5a)) c+=0x20;
+    ext=(ext<<8)|c;
+  }
+  c=(Ext32>>24)&0xff;
+  if(c!=0){
+    if((0x41<=c)&&(c<0x5a)) c+=0x20;
+    ext=(ext<<8)|c;
+  }
+  
+  for(int idx=0;idx<DLLListCount;idx++){
+    if(DLLList[idx].ext==ext){
+      return(DLLList[idx].PluginType);
+    }
+  }
+  
+  return(EPT_None);
+}
+
+EPluginType DLLList_GetPluginFilename(const char *extstr,char *resfn)
+{
+  if(resfn==NULL){
+    _consolePrintf("Fatal error: DLLList_GetPluginFilename: resfn is NULL.\n");
+    ShowLogHalt();
+  }
+  
   resfn[0]=0;
   
   if((extstr==NULL)||(extstr[0]==0)) return(EPT_None);
@@ -527,40 +703,14 @@ EPluginType DLLList_GetPluginFilename(char *extstr,char *resfn)
   return(EPT_None);
 }
 
-EPluginType DLLList_GetClockPluginFilename(int idx,char *resfn)
-{
-  resfn[0]=0;
-  
-  for(int findidx=0;findidx<DLLListCount;findidx++){
-    if(DLLList[findidx].PluginType==EPT_Clock){
-      if(idx==0){
-        strncpy(resfn,DLLList[findidx].fn,PluginFilenameMax);
-        return(DLLList[findidx].PluginType);
-      }
-      idx--;
-    }
-  }
-  
-  for(int findidx=0;findidx<DLLListCount;findidx++){
-    if(DLLList[findidx].PluginType==EPT_Clock){
-      strncpy(resfn,DLLList[findidx].fn,PluginFilenameMax);
-      return(DLLList[findidx].PluginType);
-    }
-  }
-  
-  return(EPT_None);
-}
-
 // ----------------------------------
 
-static TPluginBody *pCurrentPluginBody=NULL;
-
-TPluginBody* DLLList_LoadPlugin(char *fn)
+TPluginBody* DLLList_LoadPlugin(const char *fn)
 {
   void *buf;
-  int size;
+  s32 size;
   
-  Shell_ReadMSP(fn,&buf,&size);
+  Shell_FAT_ReadMSP(fn,&buf,&size);
   
   if((buf==NULL)||(size==0)){
     _consolePrintf("%s file read error.\n",fn);
@@ -570,134 +720,31 @@ TPluginBody* DLLList_LoadPlugin(char *fn)
   TPluginBody *pPB=(TPluginBody*)safemalloc(sizeof(TPluginBody));
   
   if(pPB==NULL){
-    _consolePrintf("Memory overflow.\n");
+    _consolePrint("Memory overflow.\n");
     return(NULL);
   }
   
-  extmem_Init();
-  
-  if(DLL_LoadLibrary(pPB,buf,size)==false){
-    extmem_Free();
+  if(DLL_LoadLibrary(pPB,Plugin_GetStdLib(),buf,size)==false){
     safefree(pPB); pPB=NULL;
     return(NULL);
   }
-  
-  pPB->INIData=NULL;
-  pPB->INISize=0;
-  pPB->BINFileHandle=0;
-  pPB->BINData=NULL;
-  pPB->BINSize=0;
-  
-  Shell_ReadMSPINI(fn,(char**)&pPB->INIData,&pPB->INISize);
-#ifdef ShowPluginInfo
-  _consolePrintf("LoadINI 0x%x(%d)\n",(u32)pPB->INIData,pPB->INISize);
-  _consolePrintf("%s\n",pPB->INIData);
-#endif
-  
-  pPB->BINFileHandle=Shell_OpenMSPBIN(fn);
-  if(pPB->BINFileHandle==0){
-    pPB->BINData=NULL;
-    pPB->BINSize=0;
-    }else{
-    pPB->BINData=NULL;
-    FileSys_fseek(pPB->BINFileHandle,0,SEEK_END);
-    pPB->BINSize=FileSys_ftell(pPB->BINFileHandle);
-    FileSys_fseek(pPB->BINFileHandle,0,SEEK_SET);
-  }
-#ifdef ShowPluginInfo
-  _consolePrintf("LoadBIN FileHandle=%d size=%d\n",pPB->BINFileHandle,pPB->BINSize);
-#endif
-  
-  pCurrentPluginBody=pPB;
   
   return(pPB);
 }
 
 void DLLList_FreePlugin(TPluginBody *pPB)
 {
-  pCurrentPluginBody=NULL;
-  
   if(pPB==NULL) return;
   
   if(pPB->pIL!=NULL) pPB->pIL->Free();
   if(pPB->pSL!=NULL) pPB->pSL->Free();
-  if(pPB->pCL!=NULL) pPB->pCL->Free();
   
   DLL_FreeLibrary(pPB,true);
   
-  if(pPB->INIData!=NULL){
-    safefree(pPB->INIData); pPB->INIData=NULL;
-    pPB->INISize=0;
-  }
-  
-  if(pPB->BINFileHandle!=0){
-    FileSys_fclose(pPB->BINFileHandle);
-    pPB->BINFileHandle=0;
-  }
-  
-  if(pPB->BINData!=NULL){
-    safefree(pPB->BINData); pPB->BINData=NULL;
-    pPB->BINSize=0;
-  }
-  
-  extmem_Free();
+  safefree(pPB); pPB=NULL;
 }
 
-char *Plugin_GetINIData(void)
-{
-  TPluginBody *pPB=pCurrentPluginBody;
-  
-  return(pPB->INIData);
-}
+// ----------------------------
 
-int Plugin_GetINISize(void)
-{
-  TPluginBody *pPB=pCurrentPluginBody;
-  
-  return(pPB->INISize);
-}
-
-void *Plugin_GetBINData(void)
-{
-  TPluginBody *pPB=pCurrentPluginBody;
-  
-  if(pPB->BINFileHandle==0) return(0);
-  if(pPB->BINSize==0) return(0);
-  
-  if(pPB->BINData==NULL){
-    pPB->BINData=safemalloc(pPB->BINSize);
-    if(pPB->BINData!=NULL){
-      FileSys_fread(pPB->BINData,1,pPB->BINSize,pPB->BINFileHandle);
-    }
-  }
-  
-  return(pPB->BINData);
-}
-
-int Plugin_GetBINSize(void)
-{
-  TPluginBody *pPB=pCurrentPluginBody;
-  
-  return(pPB->BINSize);
-}
-
-int Plugin_GetBINFileHandle(void)
-{
-  TPluginBody *pPB=pCurrentPluginBody;
-  
-  if(pPB->BINFileHandle==0) return(0);
-  if(pPB->BINSize==0) return(0);
-  
-  return(pPB->BINFileHandle);
-}
-
-int Plugin_msp_fopen(const char *fn)
-{
-  return(Shell_OpenMSPData(fn));
-}
-
-bool Plugin_msp_fclose(int fh)
-{
-  return(FileSys_fclose(fh));
-}
+// ----------------------------
 

@@ -2,9 +2,9 @@
 #ifndef plug_ndsrom_h
 #define plug_ndsrom_h
 
-#define NDSROMTitle "NDSROM bootstrap ver0.1"
+#define NDSROMTitle "NDSROM bootloader ver0.5"
 
-extern bool BootNDSROM(u32 FileIndex);
+__declspec(noreturn) extern void BootNDSROM(void);
 
 #endif
 

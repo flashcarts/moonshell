@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.
@@ -220,11 +221,13 @@ int mad_layer_I(struct mad_stream *stream, struct mad_frame *frame)
 /* --- Layer II ------------------------------------------------------------ */
 
 /* possible quantization per subband table */
-static
-struct {
+typedef struct {
   unsigned int sblimit;
-  unsigned char const offsets[30];
-} const sbquant_table[5] = {
+  unsigned char offsets[30];
+} Tsbquant_table;
+
+static
+Tsbquant_table const sbquant_table[5] = {
   /* ISO/IEC 11172-3 Table B.2a */
   { 27, { 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 3, 3, 3, 3, 3,	/* 0 */
 	  3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0 } },

@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.
@@ -73,7 +74,7 @@ void mad_decoder_init(struct mad_decoder *decoder, void *data,
 		      enum mad_flow (*message_func)(void *,
 						    void *, unsigned int *))
 {
-  decoder->mode         = -1;
+  decoder->mode         = (mad_decoder_mode)-1;
 
   decoder->options      = 0;
 
@@ -296,7 +297,7 @@ static
 enum mad_flow error_default(void *data, struct mad_stream *stream,
 			    struct mad_frame *frame)
 {
-  int *bad_last_frame = data;
+  int *bad_last_frame = (int*)data;
 
   switch (stream->error) {
   case MAD_ERROR_BADCRC:

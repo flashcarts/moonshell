@@ -5,7 +5,7 @@
 #define MP2Title "libmad - MPEG audio decoder library"
 
 #ifdef __cplusplus
-extern "C" {
+//extern "C" {
 #endif
 
 void MP2_SetFunc_consolePrintf(u32 adr);
@@ -22,7 +22,7 @@ u32 MP2_GetSamplePerFrame(void);
 u32 MP2_GetBitRate(void);
 
 #ifdef __cplusplus
-}
+//}
 #endif
 
 #endif

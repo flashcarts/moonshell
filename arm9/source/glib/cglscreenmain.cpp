@@ -8,15 +8,14 @@
 
 #define VRAMBuf ((u16*)(0x06000000))
 
-#define BG2_CR_BASE (BG_BMP16_256x256 | BG_BMP_BASE(0))
-#define BG3_CR_BASE (BG_BMP16_256x256 | BG_BMP_BASE(6))
-
-#define BG2_CR_BASE512 (BG_BMP16_512x512 | BG_BMP_BASE(0))
+// 15bit bitmap
+#define BG2_CR_BASE_15bitBM (BG_BMP16_256x256 | BG_BMP_BASE(0))
+#define BG3_CR_BASE_15bitBM (BG_BMP16_256x256 | BG_BMP_BASE(6))
 
 CglScreenMain::CglScreenMain(void)
 {
-  BG2_CR = BG2_CR_BASE | BG_PRIORITY_2;
-  BG3_CR = BG3_CR_BASE | BG_PRIORITY_1;
+  BG2_CR = 0;
+  BG3_CR = 0;
   
   {
     BG2_XDX = 1 << 8;
@@ -35,41 +34,45 @@ CglScreenMain::CglScreenMain(void)
     BG3_CY = 0;
   }
   
+  VRAMBufArray[0]=&VRAMBuf[(ScreenHeight*ScreenWidth)*0];
+  VRAMBufArray[1]=&VRAMBuf[(ScreenHeight*ScreenWidth)*1];
+  
+  pViewCanvas=new CglCanvas(VRAMBufArray[0],ScreenWidth,ScreenHeight,pf15bit);
+  pBackCanvas=new CglCanvas(VRAMBufArray[1],ScreenWidth,ScreenHeight,pf15bit);
+  
   BackVRAMPage=1;
   
-  VRAMBufArray[0]=&VRAMBuf[(0*ScreenHeight)*ScreenWidth];
-  VRAMBufArray[1]=&VRAMBuf[(1*ScreenHeight)*ScreenWidth];
+  u32 color=RGB15(0,0,0)|BIT15;
   
-  pCanvas=new CglCanvas(VRAMBufArray[0],ScreenWidth,ScreenHeight,pf15bit);
-  pCanvas->SetColor(RGB15(31,31,31)|BIT15);
-  pCanvas->FillBox(0,0,ScreenWidth,ScreenHeight);
+  pViewCanvas->SetColor(color);
+  glMemSet32CPU(color,pViewCanvas->GetVRAMBuf(),ScreenWidth*ScreenHeight*2);
   
-  pCanvas->SetVRAMBuf(VRAMBufArray[1],ScreenWidth,ScreenHeight,pf15bit);
-  pCanvas->FillBox(0,0,ScreenWidth,ScreenHeight);
+  pBackCanvas->SetColor(color);
+  glMemSet32CPU(color,pBackCanvas->GetVRAMBuf(),ScreenWidth*ScreenHeight*2);
   
-  WideFlag=false;
-  
+  mode=ESMM_Normal;
+
   Flip(true);
 }
 
 CglScreenMain::~CglScreenMain(void)
 {
-  delete pCanvas; pCanvas=NULL;
+  delete pViewCanvas; pViewCanvas=NULL;
+  delete pBackCanvas; pBackCanvas=NULL;
 }
 
-void CglScreenMain::Flip(const bool ShowFlag)
+CODE_IN_ITCM void CglScreenMain::Flip(const bool ShowFlag)
 {
-  if(WideFlag==true) return;
-  
   BackVRAMPage=1-BackVRAMPage;
-  pCanvas->SetVRAMBuf(VRAMBufArray[BackVRAMPage],ScreenWidth,ScreenHeight,pf15bit);
+  pBackCanvas->SetVRAMBuf(VRAMBufArray[BackVRAMPage],ScreenWidth,ScreenHeight,pf15bit);
+  pViewCanvas->SetVRAMBuf(VRAMBufArray[1-BackVRAMPage],ScreenWidth,ScreenHeight,pf15bit);
   
   if(BackVRAMPage==0){
-    BG2_CR = BG2_CR_BASE | BG_PRIORITY_2;
-    BG3_CR = BG3_CR_BASE | BG_PRIORITY_1;
+    BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_2;
+    BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_1;
     }else{
-    BG2_CR = BG2_CR_BASE | BG_PRIORITY_1;
-    BG3_CR = BG3_CR_BASE | BG_PRIORITY_2;
+    BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_1;
+    BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_2;
   }
   
   if(ShowFlag==true){
@@ -79,45 +82,33 @@ void CglScreenMain::Flip(const bool ShowFlag)
   }
 }
 
-u16* CglScreenMain::GetVRAMBuf(EScrMainID ScrMainID) const
+CODE_IN_ITCM void CglScreenMain::FlipForVSyncAuto(void)
 {
-  if(WideFlag==true) return(VRAMBufArray[0]);
+  BackVRAMPage=1-BackVRAMPage;
   
-  switch(ScrMainID){
-    case ScrMainID_View: return(VRAMBufArray[1-BackVRAMPage]); break;
-    case ScrMainID_Back: return(VRAMBufArray[BackVRAMPage]); break;
-  }
-  return(NULL);
-}
-
-void CglScreenMain::SetTargetPage(EScrMainID ScrMainID)
-{
-  if(WideFlag==true){
-    pCanvas->SetVRAMBuf(VRAMBufArray[0],ScreenWidth*2,ScreenHeight,pf15bit);
-    return;
-  }
-  
-  switch(ScrMainID){
-    case ScrMainID_View: pCanvas->SetVRAMBuf(VRAMBufArray[1-BackVRAMPage],ScreenWidth,ScreenHeight,pf15bit); break;
-    case ScrMainID_Back: pCanvas->SetVRAMBuf(VRAMBufArray[BackVRAMPage],ScreenWidth,ScreenHeight,pf15bit); break;
-    default: pCanvas->SetVRAMBuf(NULL,ScreenWidth,ScreenHeight,pf15bit); break;
+  if(BackVRAMPage==0){
+    BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_2;
+    BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_1;
+    }else{
+    BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_1;
+    BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_2;
   }
 }
 
-void CglScreenMain::SetBlendLevel(const int BlendLevel)
+CODE_IN_ITCM void CglScreenMain::SetBlendLevel(const int BlendLevel)
 {
-  if(WideFlag==true){
-    BLEND_CR=0;
-    return;
-  }
-  
   SetBlendLevelManual(16-BlendLevel,BlendLevel);
 }
 
-void CglScreenMain::SetBlendLevelManual(const int BlendLevelBack,const int BlendLevelView)
+CODE_IN_ITCM void CglScreenMain::SetBlendLevelManual(const int BlendLevelBack,const int BlendLevelView)
 {
-  if(WideFlag==true){
-    BLEND_CR=0;
+  if((BlendLevelBack==0)&&(BlendLevelView==16)){
+    if(BackVRAMPage==0){
+      BLEND_CR=BLEND_ALPHA | BLEND_SRC_SPRITE | BLEND_DST_BG3;
+      }else{
+      BLEND_CR=BLEND_ALPHA | BLEND_SRC_SPRITE | BLEND_DST_BG2;
+    }
+    BLEND_AB=(16 << 0) | (16 << 8);
     return;
   }
   
@@ -138,104 +129,32 @@ void CglScreenMain::SetBlendLevelManual(const int BlendLevelBack,const int Blend
   BLEND_AB=(blv << 0) | (blb << 8);
 }
 
-void CglScreenMain::CopyFullViewToBack(void)
-{
-  if(WideFlag==true) return;
+void CglScreenMain::SetMode(EScrMainMode _mode)
+{return;
+  mode=_mode;
   
-  u16 *src=GetVRAMBuf(ScrMainID_View);
-  u16 *dst=GetVRAMBuf(ScrMainID_Back);
-  glMemCopy16CPU(src,dst,ScreenHeight*ScreenWidth*2);
-}
-
-void CglScreenMain::CopyFullBackToView(void)
-{
-  if(WideFlag==true) return;
-  
-  u16 *src=GetVRAMBuf(ScrMainID_Back);
-  u16 *dst=GetVRAMBuf(ScrMainID_View);
-  glMemCopy16CPU(src,dst,ScreenHeight*ScreenWidth*2);
-}
-
-void CglScreenMain::SetWideFlag(bool w)
-{
-  WideFlag=w;
-  
-  if(WideFlag==false){
-    vramSetMainBanks(VRAM_A_MAIN_BG_0x6000000, VRAM_B_MAIN_SPRITE, VRAM_C_MAIN_BG_0x6020000, VRAM_D_SUB_SPRITE);
-/*
-    vramSetBankD(VRAM_D_MAIN_BG_0x6060000);
-    {
-      u32 *pbuf=(u32*)0x6060000;
-      for(u32 idx=0;idx<128*1024/4;idx++){
-        pbuf[idx]=0;
-      }
-    }
-    vramSetBankD(VRAM_D_ARM7);
-*/
-    BG2_CR = BG2_CR_BASE | BG_PRIORITY_2;
-    BG3_CR = BG3_CR_BASE | BG_PRIORITY_1;
-    BackVRAMPage=1;
-    }else{
-    vramSetMainBanks(VRAM_A_MAIN_BG_0x6000000, VRAM_B_MAIN_SPRITE, VRAM_C_MAIN_BG_0x6020000, VRAM_D_MAIN_BG_0x6040000);
-    BG2_CR = BG2_CR_BASE512 | BG_PRIORITY_1;
-    BG3_CR = BG_PRIORITY_3;
-    BackVRAMPage=0;
+  switch(mode){
+    case ESMM_Normal: {
+      vramSetMainBanks(VRAM_A_MAIN_BG_0x06000000, VRAM_B_MAIN_SPRITE_0x06400000, VRAM_C_MAIN_BG_0x06020000,VRAM_D_SUB_SPRITE);
+      BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_2;
+      BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_1;
+      BackVRAMPage=1;
+    } break;
+    case ESMM_ForARM7: {
+      vramSetBankD(VRAM_D_MAIN_BG_0x06060000);
+      glMemSet32CPU(0,(u32*)0x6060000,128*1024);
+      vramSetMainBanks(VRAM_A_MAIN_BG_0x06000000, VRAM_B_MAIN_BG_0x06020000, VRAM_C_ARM7_0x06000000,VRAM_D_SUB_SPRITE);
+      BG2_CR = BG2_CR_BASE_15bitBM | BG_PRIORITY_2;
+      BG3_CR = BG3_CR_BASE_15bitBM | BG_PRIORITY_1;
+      BackVRAMPage=1;
+    } break;
   }
   
-  SetTargetPage(ScrMainID_Back);
-  SetBlendLevel(16);
+  Flip(true);
 }
 
-bool CglScreenMain::GetWideFlag(void)
+EScrMainMode CglScreenMain::GetMode(void)
 {
-  return(WideFlag);
-}
-
-void CglScreenMain::SetViewSize(int w,int h)
-{
-  float ratio=(float)w/pCanvas->GetWidth();
-  
-  u16 XDX=(u16)(ratio*0x100);
-  u16 YDY=(u16)(ratio*0x100);
-  
-  BG2_XDX = XDX;
-  BG2_XDY = 0;
-  BG2_YDX = 0;
-  BG2_YDY = YDY;
-  
-  BG3_XDX = XDX;
-  BG3_XDY = 0;
-  BG3_YDX = 0;
-  BG3_YDY = YDY;
-  
-  BG2_CX=0;
-  BG2_CY=0;
-  BG3_CX=0;
-  BG3_CY=0;
-}
-
-void CglScreenMain::SetViewport(int x,int y,float fx,float fy)
-{
-  u16 XDX=(u16)((1/fx)*0x100);
-  u16 YDY=(u16)((1/fy)*0x100);
-  
-  BG2_XDX = XDX;
-  BG2_XDY = 0;
-  BG2_YDX = 0;
-  BG2_YDY = YDY;
-  
-  BG3_XDX = XDX;
-  BG3_XDY = 0;
-  BG3_YDX = 0;
-  BG3_YDY = YDY;
-  
-  x=(int)(-(x/fx)*0x100);
-  y=(int)(-(y/fy)*0x100);
-  
-  BG2_CX=x;
-  BG2_CY=y;
-  BG3_CX=x;
-  BG3_CY=y;
-  
+  return(mode);
 }
 

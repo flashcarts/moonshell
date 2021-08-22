@@ -1,0 +1,693 @@
+#include "spcme.h"
+
+#include <NDS/ARM9/console.h> //basic print funcionality
+#include "def_ndslib.h"
+#include "def_console.h"
+#include <stdlib.h>
+
+#include "spc_debug.h"
+extern "C" {
+#include "sprintf.h"
+}
+#include "apu.h"
+#include "dsp.h"
+
+// Gui updating stuff
+bool spcPlaying = false;
+bool randomNext = false;
+char curSpcName[64];
+int moveSongDir = 0;
+int elapsedTime = 0;
+long long cpuTimeUsed;
+long long dspTimeUsed;
+
+const int RAND_BUFFER_SIZE = 1024;
+int songChoice[RAND_BUFFER_SIZE];
+int songChoiceUsed[RAND_BUFFER_SIZE];
+int songsUsed;
+int numSpcs;
+
+#ifdef ARM7SPC
+u8 rawSpc[0x10200];
+#endif
+
+struct  SpcTextTagBlock{
+    char spcMagic[33];
+    char spcMagicTerminator[3];
+    char version;
+    char spcRegister[7];
+    u16 __reserved1;
+    char title[32];
+    char game[32];
+    char dumper[16];
+    char comments[32];
+    char dumpDate[11];
+    char length[3];
+    char fadeLength[5]; // In milliseconds
+    char artist[32];
+    char defaultChannels;
+    char emulator;
+    char __reserved2[45];
+} __attribute__((packed));
+
+struct SpcBinaryTagBlock {
+    char spcMagic[33];
+    char spcMagicTerminator[3];
+    char version;
+    char spcRegister[7];
+    u16 __reserved1;
+    char title[32];
+    char game[32];
+    char dumper[16];
+    char comments[32];
+
+    // Different from text tag starting here.
+    u16 dumpDateYear;
+    u8 dumpDateMonth;
+    u8 dumpDateDay;
+    char __unused[7];
+    u16 length;
+    char __unused2;
+    u16 fadeLength; // In milliseconds
+    char artist[32];
+    char defaultChannels;
+    char emulator;
+    char __reserved2[46];
+} __attribute__((packed));
+
+struct ID666Info {
+    bool valid;
+    char songTitle[33];
+    char gameTitle[33];
+    char comments[33];
+    char songLength[33];
+    int songLengthRaw;
+    char artist[33];
+};
+ID666Info curId666Info;
+
+// Base of file table to load roms from
+u8 *fileTableBase;
+
+void WaitForVBlank() {
+//    while(!(DISP_SR & DISP_IN_VBLANK));
+//    while((DISP_SR & DISP_IN_VBLANK));
+    swiWaitForVBlank();
+}
+
+const u32 *GetFileTable(u8 *base, int stride) {
+    fileTableBase = base;
+	u32 *start = ((u32*)fileTableBase);
+	for (;;) {
+		if (start[0] == ((123) | (154 << 8) | (143 << 16) | (36 << 24)) &&
+			((start[1] & 0xffff) == ((201) | (243 << 8))) &&
+            ((start[1] >> 16) == ((9) | (255 << 8))))
+			break;
+		start += (stride >> 2);
+	}
+	return start + 2;
+}
+
+const u8 *GetFile(const u32 *fileTable, u32 index) {
+	if (fileTable[index] == 0) return 0;
+	return fileTableBase + fileTable[index];
+}
+
+u32 randSeed = 6343631;
+u32 myRand() {
+    return (randSeed = ((randSeed * 2776669) + 1731) & 4194303);
+}
+
+void memset(void *data, int fill, int length) {
+    uint8 *data2 = (uint8*)data;
+    while (length-- > 0) {
+        *data2++ = fill;
+    }
+}
+
+void memcpy(void *dest, const void *src, int length) {
+    uint8 *dest2 = (uint8*)dest;
+    uint8 *src2 = (uint8*)src;
+    while (length--) {
+        *dest2++ = *src2++;
+    }
+}
+
+void SendArm7Command(u32 command) {
+    IPC_FIFO_SEND = command;
+}
+
+// DEBUG
+#ifdef COMPILE_SNES9X
+// Snes9x stuff
+void run9xApu(const u8 *spu);
+void init9xApu(const u8 *spc);
+void s9xExecute(int cycles);
+void step9xApu();
+bool compareState(u8 *mem, u8 *dsp, u8 *extra, u16 pc, char *debugState);
+void s9xDspMixSamplesStereo(int numSamples, u16 *left, u16 *right);
+
+char buf[300];
+
+void myCompare(u16 pc) {
+    bool res = compareState(SPC_IPC->APU_RAM, SPC_IPC->DSP_RAM, APU_EXTRA_MEM, pc, buf);
+    if (res == false) {
+        consoleClear();
+        consolePrintSet(0,0);
+        consolePrintf("%s\nStep: %d\n", buf, SPC_IPC->curStep);
+        for(;;);
+    }
+}
+#endif
+
+#ifdef COMPILE_SNEESE
+char buf[300];
+
+bool compareState(u8 *mem, u8 *dsp, u8 *extra, u16 pc, char *debugState);
+void initSneeseApu(const u8 *spc);
+void Execute_SPC(); 
+
+void myCompare(u16 pc) {
+    bool res = compareState(APU_MEM, DSP_MEM, APU_EXTRA_MEM, pc, buf);
+    if (res == false) {
+        consoleClear();
+        consolePrintSet(0,0);
+        consolePrintf("%s\n", buf);
+        for(;;);
+    }
+}
+
+#include "sneese/spc.h"
+
+/*#define _Cycles         (active_context->Cycles)
+#define _last_cycles    (active_context->last_cycles)
+#define _TotalCycles    (active_context->TotalCycles)
+#define _WorkCycles     (active_context->WorkCycles)*/
+
+void stepSneese() {
+    TotalCycles = 1;
+    active_context->Cycles = 0;
+    Execute_SPC();
+}
+#endif
+
+#ifdef DEBUG
+int totalCycles = 0;
+void stepApu() {
+    ApuExecute(1);
+    int cyclesRun = (APU_STATE[6] >> 3) + 1;
+    ApuUpdateTimers(cyclesRun);
+    totalCycles += cyclesRun;
+    while (totalCycles > 32) {
+        DspEmulateKeyOnOff();
+        DspEmulateOneSample(((u16*)SPC_IPC->playBuffer));
+        totalCycles -= 32;
+    }
+//    lastApuCycles = APU_STATE[6] >> 3;
+    // Back to zero cycles
+    APU_STATE[6] &= 0x7;
+}
+#endif
+
+bool SpcHeaderIsText(const char *s, int l)
+{
+    int i;
+    for (i = 0; i < l && (s[i] == 0 || (s[i] >= '0' && s[i] <= '9') || s[i] == '/'); i++);
+    if(s[i] == 0 || i == l) return true;
+    return false;
+}
+
+bool SpcHeaderIsSet(char *s, int l)
+{
+    for(int i = 0; i < l; ++i) if (s[i]) return true;
+    return false;
+}
+
+void LoadSpc(const u8 *spc) {
+#ifdef ARM7SPC
+    while (SPC_IPC->arm7State != ARM7STATE_WAITING);
+
+    for (int i = 0; i < 0x10200; i++) rawSpc[i] = spc[i];
+    SPC_IPC->rawSpc = rawSpc;
+    SendArm7Command(ARM7COMMAND_LOAD_SPC);
+
+    while (SPC_IPC->arm7State != ARM7STATE_READY);
+    
+#else
+    // Load the SPC
+    ApuReset();
+    DspReset();
+
+// 0 - A, 1 - X, 2 - Y, 3 - RAMBASE, 4 - DP, 5 - PC (Adjusted into rambase)
+// 6 - Cycles (bit 0 - C, bit 1 - v, bit 2 - h, bits 3+ cycles left)
+// 7 - Optable
+// 8 - NZ
+
+    APU_STATE[0] = spc[0x27]<<24; // A
+    APU_STATE[1] = spc[0x28]<<24; // X
+    APU_STATE[2] = spc[0x29]<<24; // Y
+    SetStateFromRawPSW(APU_STATE, spc[0x2A]);
+    APU_SP = 0x100 | spc[0x2B]; // SP
+    APU_STATE[5] = APU_STATE[3] + (spc[0x25] | (spc[0x26] << 8)); // PC
+
+    for (int i=0; i<=0xffff; i++) APU_MEM[i] = spc[0x100 + i];
+    for (int i=0; i<=0x7f; i++) {
+        DSP_MEM[i] = spc[0x10100 + i];
+    }
+    for (int i=0; i<=0x3f; i++) APU_EXTRA_MEM[i] = spc[0x101c0 + i];
+
+    ApuPrepareStateAfterReload();
+    DspPrepareStateAfterReload();
+#endif
+
+    // ID 666 information
+    if (spc[0x23] == 26) {
+        union SpcHeaderBlock {
+            SpcTextTagBlock text;
+            SpcBinaryTagBlock binary;
+        } *spcHeader;
+
+        spcHeader = (SpcHeaderBlock*)&spc[0];
+
+        memset(&curId666Info, 0, sizeof(curId666Info));
+
+        curId666Info.valid = true;
+
+        memcpy(curId666Info.songTitle, spcHeader->text.title, 30);
+        curId666Info.songTitle[30] = 0;
+        memcpy(curId666Info.gameTitle, spcHeader->text.game, 30);
+        curId666Info.gameTitle[30] = 0;
+        memcpy(curId666Info.comments, spcHeader->text.comments, 30);
+        curId666Info.comments[30] = 0;
+        memcpy(curId666Info.artist, spcHeader->text.artist, 30);
+        curId666Info.artist[30] = 0;
+
+        bool isText = false;
+        if(SpcHeaderIsSet(spcHeader->text.length, 3)) {
+            isText = SpcHeaderIsText(spcHeader->text.length, 3);
+        } else if(SpcHeaderIsSet(spcHeader->text.dumpDate, 6)) {
+            isText = SpcHeaderIsText(spcHeader->text.dumpDate, 6);
+        }
+
+        if (isText) {
+            char tmp[4];
+            memcpy(tmp, spcHeader->text.length, 3);
+            tmp[3] = 0;
+            curId666Info.songLengthRaw = atoi(tmp) + 3;
+        } else {
+            curId666Info.songLengthRaw = spcHeader->binary.length + 3;
+        }
+        if (curId666Info.songLengthRaw == 3) {
+            curId666Info.songLengthRaw = 3 * 60; // 3 minutes if it's default
+        }
+        sprintf(curId666Info.songLength, "%d:%.2d", curId666Info.songLengthRaw / 60, curId666Info.songLengthRaw % 60);
+    } else {
+        // No extra info
+        curId666Info.valid = false;
+    }
+}
+
+extern "C" {
+void IntrHandlerAsm();
+void CODE_IN_ITCM InterruptHandler(void) {
+    u32 flags = IF;
+
+#ifndef ARM7SPC
+    if (flags & IRQ_FIFO_NOT_EMPTY) {
+        // Command recieved from arm7
+        do {
+            u32 command = IPC_FIFO_RECIEVE;
+
+            switch (command) {
+            case ARM9COMMAND_UPDATE_APU:
+                const int cyclesToExecute = spcCyclesPerSec / (MIXRATE / MIXBUFSIZE);
+                long long begin = TIMER0_DATA + ((long long)TIMER1_DATA << 19);
+                for (int i = 0; i < cyclesToExecute / 32; i++) {
+                    ApuExecute(32);
+                    DspEmulateOneSample(((u16*)SPC_IPC->playBuffer) + i);
+//                    dspTimeUsed += (TIMER0_DATA + ((long long)TIMER1_DATA << 19)) - end;
+                }
+                long long end = TIMER0_DATA + ((long long)TIMER1_DATA << 19);
+                cpuTimeUsed += end - begin;
+                break;
+            }
+        } while (!(IPC_FIFO_CR & IPC_FIFO_RECV_EMPTY));
+
+        IF = IRQ_FIFO_NOT_EMPTY;
+    }
+#endif
+
+    if (flags & IRQ_VBLANK) {
+#ifdef ARM7SPC
+        *((vu16*)0x27ffff2) = dspPreamp;
+#endif
+
+        BIOS_INTR_ACK = IRQ_VBLANK;
+        IF = IRQ_VBLANK;
+    }
+}
+}
+
+static void InitInterrupts() {
+    IME = 0;
+    DTCM_IRQ_HANDLER = &IntrHandlerAsm;
+
+    IE = IRQ_FIFO_NOT_EMPTY | IRQ_VBLANK;
+
+    DISP_SR = DISP_VBLANK_IRQ;
+    IPC_FIFO_CR = IPC_FIFO_ENABLE | IPC_FIFO_SEND_CLEAR | IPC_FIFO_RECV_IRQ;
+
+    IF = ~0;
+    IME = 1;
+}
+
+void RunSpc() {
+    elapsedTime = 0;
+    spcPlaying = true;
+
+    TIMER0_DATA = 0;
+    TIMER0_CR = TIMER_DIV_64 | TIMER_ENABLE;
+
+    TIMER1_DATA = 0;
+    TIMER1_CR = TIMER_CASCADE | TIMER_ENABLE;
+
+#ifndef ARM7SPC
+    for (int i = 0; i < MIXBUFSIZE * 2; i++) SPC_IPC->playBuffer[i] = 0;
+#endif
+
+    // Arm7 sync stuff
+    SPC_IPC->curCommand = 0;
+    SendArm7Command(ARM7COMMAND_START_SOUND);
+
+    consoleClear();
+    consolePrintSet(0, 0);
+    consolePrintf("\n\nFilename: %s\n\n", curSpcName);
+    if (curId666Info.valid) {
+        if (curId666Info.songTitle[0] != 0) consolePrintf("Song Title:\n %s\n",curId666Info.songTitle);
+        if (curId666Info.gameTitle[0] != 0) consolePrintf("Game Title:\n %s\n",curId666Info.gameTitle);
+        if (curId666Info.comments[0] != 0) consolePrintf("Comments:\n %s\n",curId666Info.comments);
+        if (curId666Info.artist[0] != 0) consolePrintf("Artist:\n %s\n",curId666Info.artist);
+    }
+
+    int maxCpu = 0;
+
+    while (spcPlaying) {
+        // Update the song information every vblank
+        swiWaitForVBlank();
+
+        elapsedTime++;
+        int elapsedSec = swiDivide(elapsedTime,60);
+
+        consolePrintSet(0, 0);
+
+        if (curId666Info.valid) {
+            consolePrintf("Elapsed time: %d:%2d/%s  \n", swiDivide(elapsedSec,60), elapsedSec % 60, curId666Info.songLength);
+            if (elapsedSec > curId666Info.songLengthRaw) {
+                moveSongDir = 1;
+                spcPlaying = false;
+            }
+        } else {
+            consolePrintf("Elapsed time: %d:%2d  \n", swiDivide(elapsedSec, 60), swiDivide(elapsedSec, 60));
+        }
+        consolePrintf("Volume: %d%  Randomize:%s  \n", swiDivide(dspPreamp * 100, 0x140), randomNext?"Yes":"No");
+
+        long long curTime = TIMER0_DATA | ((long long)TIMER1_DATA * (1 << 19));
+#ifndef ARM7SPC
+        int cpuUsed = (int)((cpuTimeUsed * 100) / curTime);
+        int dspUsed = (int)((dspTimeUsed * 100) / curTime);
+
+        TIMER0_CR = 0;
+        TIMER1_CR = 0;
+        TIMER0_DATA = 0;
+        TIMER0_CR = TIMER_DIV_64 | TIMER_ENABLE;
+        TIMER1_DATA = 0;
+        TIMER1_CR = TIMER_CASCADE | TIMER_ENABLE;
+        cpuTimeUsed = 0;
+        dspTimeUsed = 0;
+#else
+        curTime = SPC_IPC->curTime;
+        int cpuUsed = (int)((SPC_IPC->cpuTime * 100) / curTime);
+        int dspUsed = (int)((SPC_IPC->dspTime * 100) / curTime);
+        SPC_IPC->cpuTime = 0;
+        SPC_IPC->dspTime = 0;
+        SPC_IPC->curTime = 0;
+#endif
+        if (cpuUsed + dspUsed > maxCpu) maxCpu = cpuUsed + dspUsed;
+
+        consolePrintSet(0, 13);
+        char c[100];
+        sprintf(c, "Cpu %2d Dsp %2d Tot %2d Max %2d  ", cpuUsed, dspUsed, cpuUsed + dspUsed, maxCpu);
+        consolePrintf("%s\n", c);
+
+        consolePrintSet(0, 14);
+        consolePrintf("Channel states:\n");
+        for (int i = 0; i < 8; i++) {
+            sprintf(c, "%d %d %d %2x %4x %2x e:%3d %2x %2x", (int)channels[i].active, (int)channels[i].envState,
+                (int)channels[i].echoEnabled, channels[i].envx >> 8,
+                (DSP_MEM[(i << 4) | DSP_PITCH_H] << 8) | DSP_MEM[(i << 4) | DSP_PITCH_L],
+                DSP_MEM[(i << 4) + DSP_SRC], DSP_MEM[(i << 4) | 0xf], channels[i].leftVolume & 0xff, channels[i].rightVolume & 0xff);
+            consolePrintf("%s\n",c);
+        }
+
+		scanKeys();
+
+        if(keysDown() & KEY_B) {
+            spcPlaying = false;
+        }
+        if (keysDown() & KEY_SELECT) {
+            randomNext = !randomNext;
+        }
+        if((keysDown() & KEY_LEFT) || (keysDown() & KEY_L)) {
+            moveSongDir = -1;
+            spcPlaying = false;
+        }
+        if ((keysDown() & KEY_RIGHT) || (keysDown() & KEY_R)) {
+            moveSongDir = 1;
+            spcPlaying = false;
+        }
+        if (keysHeld() & KEY_UP) {
+            if (dspPreamp != 0xffff) dspPreamp++;
+        }
+        if (keysHeld() & KEY_DOWN) {
+            if (dspPreamp != 0) dspPreamp--;
+        }
+    }
+
+    TIMER0_CR = 0;
+    TIMER1_CR = 0;
+    cpuTimeUsed = 0;
+
+    SendArm7Command(ARM7COMMAND_STOP_SOUND);
+}
+
+void RegenRandPlan() {
+    songsUsed = 0;
+    for (int i = 0; i < numSpcs; i++) {
+        songChoiceUsed[i] = i;
+        songChoice[i] = -1;
+    }
+    for (int i = 0; i < numSpcs; i++) {
+        int choice = myRand() % (numSpcs - songsUsed);
+        int at = 0;
+        while (songChoice[at] != -1) at++;
+        for (int j = 0; j < choice; j++) {
+            at++;
+            while (songChoice[at] != -1) at++;
+        }
+        songChoice[at] = songChoiceUsed[i];
+        songsUsed++;
+    }
+    songsUsed = 0;
+}
+
+void ShowMenu() {
+    u8 *base = (u8*)0x08000000;
+    int stride = 256;
+/*    u8 *tmp = (u8*)0x08000000;
+    if (tmp[0] != 0 || tmp[1] != 0xFE) {
+        base = (u8*)0x08000000;
+        stride = 256;
+    }*/
+
+	const u32 *fileTable = GetFileTable(base, stride);
+
+    // Count the number of files available
+    for (numSpcs = 0; GetFile(fileTable, numSpcs) != 0; numSpcs++);
+
+    randSeed = *(u32*)0x27fff04;
+    RegenRandPlan();
+
+    int startFile = 0;
+    bool selectFile = true;
+	for (;;){
+        if (startFile < 0) startFile = numSpcs - 1;
+        if (startFile >= numSpcs) startFile = 0;
+
+        while (selectFile) {
+			WaitForVBlank();
+            consoleClear();
+            consolePrintSet(0, 0);
+			for (int i=startFile; i<startFile+24; i++) {
+				const u8 *file = GetFile(fileTable, i);
+				if (file == 0) break;
+                for (int i = 0; i < 30; i++) {
+                    if (file[i] == 0) break;
+                    consolePrintChar(file[i]);
+                }
+                consolePrintChar('\n');
+			}
+			while (KEYS & KEY_A) {
+				if (!(KEYS & KEY_DOWN)) {
+					startFile++;
+					if (GetFile(fileTable, startFile) == 0) startFile--;
+					for (int i=0; i<10; i++) WaitForVBlank();
+					break;
+				}
+				if (!(KEYS & KEY_UP)) {
+					if (startFile != 0) startFile--;
+					for (int i=0; i<10; i++) WaitForVBlank();
+					break;
+				}
+				WaitForVBlank();
+			}
+			if (!(KEYS & KEY_A)) break;
+		}
+
+        // Load the spc
+		LoadSpc(GetFile(fileTable, startFile) + 64);
+
+        sprintf(curSpcName, "%s", GetFile(fileTable, startFile));
+
+        moveSongDir = 0;
+        RunSpc();
+
+        if (moveSongDir != 0) {
+            selectFile = false;
+            if (randomNext) {
+                songsUsed += moveSongDir;
+                if (songsUsed < 0) songsUsed = numSpcs - 1;
+                if (songsUsed >= numSpcs) { songsUsed = 0; RegenRandPlan(); }
+                startFile = songChoice[songsUsed];
+            } else {
+                startFile += moveSongDir;
+            }
+        } else {
+            selectFile = true;
+        }
+	}
+}
+
+#define	REG_WRAMCNT			*(vu8*)0x04000247
+#define EXCEPTION_HANDLER   *(u32*)0xffff0010
+
+void exceptionHandler() {
+    videoSetModeSub(MODE_0_2D | DISPLAY_BG0_ACTIVE);
+    vramSetBankC(VRAM_C_SUB_BG); 
+
+    SUB_BG0_CR = BG_MAP_BASE(31);
+
+    BG_PALETTE_SUB[255] = RGB15(31,31,31);
+
+    consoleInitDefault((u16*)SCREEN_BASE_BLOCK_SUB(31), (u16*)CHAR_BASE_BLOCK_SUB(0), 16);
+
+    consolePrintf("Exception hit!!!\n");
+    for(;;);
+}
+
+int spc_main() {
+//    EXCEPTION_HANDLER = (u32)&exceptionHandler;
+
+    SPC_IPC->arm9State = ARM9STATE_INITIALIZING;
+
+    videoSetModeSub(MODE_0_2D | DISPLAY_BG0_ACTIVE);
+    vramSetBankC(VRAM_C_SUB_BG); 
+
+    SUB_BG0_CR = BG_MAP_BASE(31);
+
+    BG_PALETTE_SUB[255] = RGB15(31,31,31); //by default font will be rendered with color 255
+
+    // consoleInit() is a lot more flexible but this gets you up and running quick
+    consoleInitDefault((u16*)SCREEN_BASE_BLOCK_SUB(31), (u16*)CHAR_BASE_BLOCK_SUB(0), 16);
+
+    InitInterrupts();
+
+    // Wait for the arm7 to set itself up
+//    while (SPC_IPC->arm7State != ARM7STATE_WAITING);
+
+
+#ifndef DEBUG
+    SPC_IPC->arm9State = ARM9STATE_READY;
+    ShowMenu();
+#else
+    const u32 *fileTable = GetFileTable((u8*)0x08000000, 256);
+
+    consolePrintf("Loading...");
+#ifdef COMPILE_SNES9X
+    init9xApu(GetFile(fileTable, 0) + 64);
+#endif
+#ifdef COMPILE_SNEESE
+    initSneeseApu(GetFile(fileTable, 0) + 64);
+#endif
+    SPC_IPC->arm9State = ARM9STATE_READY;
+    LoadSpc(GetFile(fileTable, 0) + 64);
+    consolePrintf(" Done!\n");
+
+    u16 lastPC = APU_STATE[5] - APU_STATE[3];
+//    myCompare(lastPC);
+
+    for (;;) {
+        PrintDisasm(21,lastPC,APU_STATE[5] - APU_STATE[3]);
+		lastPC = APU_STATE[5] - APU_STATE[3];
+
+        for (;;) {
+            WaitForVBlank();
+//            PrintDspState();
+            scanKeys();
+
+/*            while (numCycles < 0) {
+#ifdef COMPILE_SNES9X
+                s9xDspMixSamplesStereo(MIXBUFSIZE, &rawLeftBuffer[SPC_IPC->soundCursor], &rawRightBuffer[SPC_IPC->soundCursor]);
+#endif
+                numCycles += cyclesToExecute;
+            }*/
+
+            if (keysDown() & KEY_A) {
+//                stepSneese();
+                stepApu();
+
+                u16 pc = APU_STATE[5] - APU_STATE[3];
+//                myCompare(lastPC);
+                if (pc > lastPC + 3 || pc < lastPC) {
+                    lastPC = pc;
+                }
+                break;
+            }
+
+            if (keysDown() & KEY_LEFT) {
+                for (int i = 0; i < 500; i++) {
+                    consolePrintSet(0,0);
+                    consolePrintf("%d  \n",i);
+            		lastPC = APU_STATE[5] - APU_STATE[3];
+
+//                    stepSneese();
+                    stepApu();
+
+                    u16 pc = APU_STATE[5] - APU_STATE[3];
+//                    myCompare(lastPC);
+                    if (pc > lastPC + 3 || pc < lastPC) {
+                        lastPC = pc;
+                    }
+                }
+            }
+        }
+    }
+
+//    testInstructionSet();
+
+//    RunSpc();
+
+//    debugLoop();
+#endif
+
+    return 0;
+}

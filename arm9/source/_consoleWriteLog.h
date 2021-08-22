@@ -10,16 +10,10 @@
 #define cwl(); 
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void PrfStart(void);
-u32 PrfEnd(int data);
-
-#ifdef __cplusplus
-}
-#endif
+extern void PrfStart(void);
+extern void PrfEnd(int data);
+extern u32 PrfEnd_GetCPUCount(void);
+extern u32 PrfEnd_Getus(void);
 
 static inline void _cwl(char *file,int line)
 {

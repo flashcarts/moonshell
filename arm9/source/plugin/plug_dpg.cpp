@@ -4,8 +4,8 @@
 #include <string.h>
 #include <NDS.h>
 
-#include "../filesys.h"
-#include "../cstream_fs.h"
+#include "../libs/cstream_fs.h"
+#include "_console.h"
 
 #include "plug_dpg.h"
 #include "plug_mp2.h"
@@ -14,110 +14,6 @@
 
 bool DPG_RequestSyncStart;
 
-#ifndef USEDPG
-
-bool StartDPG(int _FileHandleVideo,int _FileHandleAudio)
-{
-  return(false);
-}
-
-u32 UpdateDPG_Audio(s16 *lbuf,s16 *rbuf)
-{
-  return(0);
-}
-
-bool UpdateDPG_Video(u64 CurrentSamplesCount)
-{
-  return(false);
-}
-
-void FreeDPG(void)
-{
-}
-
-u32 DPG_GetCurrentFrameCount(void)
-{
-  return(0);
-}
-
-u32 DPG_GetTotalFrameCount(void)
-{
-  return(0);
-}
-
-u32 DPG_GetFPS(void)
-{
-  return(0);
-}
-
-u32 DPG_GetSampleRate(void)
-{
-  return(0);
-}
-
-u32 DPG_GetChannelCount(void)
-{
-  return(0);
-}
-
-u32 DPG_GetSamplePerFrame(void)
-{
-  return(0);
-}
-
-void DPG_SetFrameCount(u32 Frame)
-{
-}
-
-u32 DPG_GetWidth(void)
-{
-  return(0);
-}
-
-u32 DPG_GetHeight(void)
-{
-  return(0);
-}
-
-void DPG_SetVideoDelayms(int ms)
-{
-}
-
-void DPG_fread(void)
-{
-}
-
-void DPG_fread_flash(void)
-{
-}
-
-int DPG_GetInfoIndexCount(void)
-{
-  return(0);
-}
-
-bool DPG_GetInfoStrL(int idx,char *str,int len)
-{
-  return(false);
-}
-
-bool DPG_GetInfoStrW(int idx,UnicodeChar *str,int len)
-{
-  return(false);
-}
-
-bool DPG_GetInfoStrUTF8(int idx,char *str,int len)
-{
-  return(false);
-}
-
-EDPGAudioFormat DPG_GetDPGAudioFormat(void)
-{
-  return(DPGAF_GSM);
-}
-
-#else
-
 static bool Initialized=false;
 
 static Clibdpg *pClibdpg=NULL;
@@ -125,10 +21,14 @@ static Clibdpg *pClibdpg=NULL;
 static CStreamFS *pCStreamFS_DPGM=NULL;
 static CStreamFS *pCStreamFS_DPGA=NULL;
 
-bool StartDPG(int _FileHandleVideo,int _FileHandleAudio)
+#include "_dpgfs.h"
+
+bool StartDPG(FAT_FILE *_FileHandleVideo,FAT_FILE *_FileHandleAudio)
 {
   if(Initialized==true) FreeDPG();
   Initialized=true;
+  
+  DPGFS_Init(_FileHandleVideo);
   
   pCStreamFS_DPGM=new CStreamFS(_FileHandleVideo);
   pCStreamFS_DPGA=new CStreamFS(_FileHandleAudio);
@@ -146,6 +46,8 @@ void FreeDPG(void)
 {
   if(Initialized==false) return;
   Initialized=false;
+  
+  DPGFS_Free();
   
   DPG_RequestSyncStart=false;
   
@@ -185,33 +87,26 @@ u32 DPG_GetChannelCount(void)
   return(pClibdpg->DPGINFO.SndCh);
 }
 
-u32 DPG_GetSamplePerFrame(void)
+void UpdateDPG_Audio(void)
 {
-  switch(pClibdpg->GetDPGAudioFormat()){
-    case DPGAF_GSM: return(GSM_GetSamplePerFrame()); break;
-    case DPGAF_MP2: return(MP2_GetSamplePerFrame()); break;
-  }
+  if(Initialized==false) return;
   
-  return(0);
+  switch(pClibdpg->GetDPGAudioFormat()){
+    case DPGAF_MP2: MP2_LoadReadBuffer(); break;
+  }
 }
 
-bool UpdateDPG_Video(u64 CurrentSamplesCount)
+bool UpdateDPG_Video(void)
 {
   if(Initialized==false) return(false);
   
-  switch(pClibdpg->GetDPGAudioFormat()){
-    case DPGAF_GSM: GSM_LoadReadBuffer(); break;
-    case DPGAF_MP2: MP2_LoadReadBuffer(); break;
-  }
-  
-  return(pClibdpg->MovieProcDecode(CurrentSamplesCount));
+  return(pClibdpg->MovieProcDecode());
 }
 
-u32 UpdateDPG_Audio(s16 *lbuf,s16 *rbuf)
+extern void DPG_SliceOneFrame(u16 *pVRAMBuf1,u16 *pVRAMBuf2)
 {
-  if(Initialized==false) return(0);
-  
-  return(pClibdpg->AudioDecode(lbuf,rbuf));
+  if(Initialized==false) return;
+  pClibdpg->SliceOneFrame(pVRAMBuf1,pVRAMBuf2);
 }
 
 void DPG_SetFrameCount(u32 Frame)
@@ -229,70 +124,70 @@ u32 DPG_GetHeight(void)
   return(pClibdpg->GetHeight());
 }
 
-void DPG_fread(void)
-{
-  switch(pClibdpg->GetDPGAudioFormat()){
-    case DPGAF_GSM: GSM_fread(); break;
-    case DPGAF_MP2: MP2_fread(); break;
-  }
-  
-  return;
-}
-
-void DPG_fread_flash(void)
-{
-  switch(pClibdpg->GetDPGAudioFormat()){
-    case DPGAF_GSM: GSM_fread_flash(); break;
-    case DPGAF_MP2: MP2_fread_flash(); break;
-  }
-  
-  return;
-}
-
-int DPG_GetInfoIndexCount(void)
-{
-  return(8);
-}
-
-bool DPG_GetInfoStrL(int idx,char *str,int len)
-{
-  TDPGINFO *pDPGINFO=&pClibdpg->DPGINFO;
-  
-  switch(idx){
-    case 0: snprintf(str,len,"Video TotalFrame=%d fps=%f",pDPGINFO->TotalFrame,(float)pDPGINFO->FPS/0x100); return(true); break;
-    case 1: snprintf(str,len,"ScreenPixels=%dx%d",pClibdpg->GetWidth(),pClibdpg->GetHeight()); return(true); break;
-    case 2: snprintf(str,len,"Audio %dHz %dChannels",pDPGINFO->SndFreq,pDPGINFO->SndCh); return(true); break;
-    case 3: {
-      int sec=pDPGINFO->TotalFrame*0x100/pDPGINFO->FPS;
-      snprintf(str,len,"Length=%d:%2d",sec/60,sec%60);
-      return(true);
-    } break;
-    case 4: snprintf(str,len,"Movie %d->%dbytes.",pDPGINFO->MoviePos,pDPGINFO->MovieSize); return(true); break;
-    case 5: snprintf(str,len,"Audio %d->%dbytes.",pDPGINFO->AudioPos,pDPGINFO->AudioSize); return(true); break;
-    case 6: snprintf(str,len,"GOPList %d->%dbytes.",pDPGINFO->GOPListPos,pDPGINFO->GOPListSize); return(true); break;
-    case 7: {
-      const char pfstr[][6]={"RGB15","RGB18","RGB21","RGB24"};
-      snprintf(str,len,"PixelFormat %d %s",pDPGINFO->PixelFormat,pfstr[(int)pDPGINFO->PixelFormat]);
-      return(true);
-    } break;
-  }
-  return(false);
-}
-
-bool DPG_GetInfoStrW(int idx,UnicodeChar *str,int len)
-{
-  return(false);
-}
-
-bool DPG_GetInfoStrUTF8(int idx,char *str,int len)
-{
-  return(false);
-}
-
 EDPGAudioFormat DPG_GetDPGAudioFormat(void)
 {
   return(pClibdpg->GetDPGAudioFormat());
 }
 
-#endif
+void DPG_DrawInfo(CglCanvas *pCanvas)
+{
+  TDPGINFO *pDPGINFO=&pClibdpg->DPGINFO;
+  
+  char str[64];
+  
+  u32 x=8,y=DPG_DrawInfoDiffHeight()+8,h=14;
+  u32 line=0;
+  
+  snprintf(str,64,"DPG file information.");
+  pCanvas->TextOutA(x,y,str);
+  line++;
+  
+  snprintf(str,64,"Video TotalFrame=%d fps=%f",pDPGINFO->TotalFrame,(float)pDPGINFO->FPS/0x100);
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+  const char pfstr[][6]={"RGB15","RGB18","RGB21","RGB24"};
+  snprintf(str,64,"ScreenSize %dx%dpixels (%s)",pClibdpg->GetWidth(),pClibdpg->GetHeight(),pfstr[(int)pDPGINFO->PixelFormat]);
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+  switch(pDPGINFO->SndCh){
+    case 0: snprintf(str,64,"%dHz mp2 build-in mpeg1audio-layer2",pDPGINFO->SndFreq); break;
+    default: snprintf(str,64,"Unknown format"); break;
+  }
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+  snprintf(str,64,"MovieData %d->%dbytes.",pDPGINFO->MoviePos,pDPGINFO->MovieSize);
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+  snprintf(str,64,"AudioData %d->%dbytes.",pDPGINFO->AudioPos,pDPGINFO->AudioSize);
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+  snprintf(str,64,"GOPListData %d->%dbytes.",pDPGINFO->GOPListPos,pDPGINFO->GOPListSize);
+  pCanvas->TextOutA(x,y+(h*line),str);
+  line++;
+}
+
+extern u32 DiskCache_GetReadySize(void);
+
+u32 DPG_DrawInfoDiffHeight(void)
+{
+  return(32);
+}
+
+void DPG_DrawInfoDiff(CglCanvas *pCanvas)
+{
+  char str[64];
+  
+  u32 x=8,y=4;
+  
+  snprintf(str,64,"Frame cache %d/%dframes",FrameCache_GetReadFrameLastCount(),FrameCache_GetReadFramesCount());
+  pCanvas->TextOutA(x,y+(14*0),str);
+  snprintf(str,64,"Disk cache %dbytes",DiskCache_GetReadySize());
+  pCanvas->TextOutA(x,y+(14*1),str);
+  
+  x+=176;
+  pCanvas->TextOutA(x,y+(14*0),"current.");
+  snprintf(str,64,"%dframe",DPG_GetCurrentFrameCount());
+  pCanvas->TextOutA(x,y+(14*1),str);
+}
+
 

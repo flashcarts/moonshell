@@ -28,12 +28,6 @@
 #ifndef MPEG2_H
 #define MPEG2_H
 
-#include "../../arm9tcm.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define MPEG2_VERSION(a,b,c) (((a)<<16)|((b)<<8)|(c))
 #define MPEG2_RELEASE MPEG2_VERSION (0, 4, 0)	/* 0.4.0 */
 
@@ -98,7 +92,7 @@ typedef struct mpeg2_gop_s {
 typedef struct mpeg2_picture_s {
     unsigned int temporal_reference;
     unsigned int nb_fields;
-    uint32_t tag, tag2;
+    //uint32_t tag, tag2;
     uint32_t flags;
     struct {
 	int x, y;
@@ -189,7 +183,8 @@ void mpeg2_tag_picture (mpeg2dec_t * mpeg2dec, uint32_t tag, uint32_t tag2);
 
 void mpeg2_init_fbuf (mpeg2_decoder_t * decoder, uint8_t * current_fbuf[3],
 		      uint8_t * forward_fbuf[3], uint8_t * backward_fbuf[3]);
-CODE_IN_ITCM void mpeg2_slice (mpeg2_decoder_t * decoder, int code, const uint8_t * buffer);
+bool mpeg2_slice_start (mpeg2_decoder_t * decoder, int code, const uint8_t * buffer);
+void mpeg2_slice (mpeg2_decoder_t * decoder, int code, const uint8_t * buffer);
 
 typedef enum {
     MPEG2_ALLOC_MPEG2DEC = 0,
@@ -203,9 +198,5 @@ void * mpeg2_malloc (unsigned size, mpeg2_alloc_t reason);
 void mpeg2_free (void * buf);
 void mpeg2_malloc_hooks (void * malloc (unsigned, mpeg2_alloc_t),
 			 int free (void *));
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* MPEG2_H */

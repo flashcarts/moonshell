@@ -22,6 +22,8 @@
 # ifndef LIBMAD_FIXED_H
 # define LIBMAD_FIXED_H
 
+#define SIZEOF_INT 4
+
 # if SIZEOF_INT >= 4
 typedef   signed int mad_fixed_t;
 
@@ -250,6 +252,7 @@ mad_fixed_t mad_f_mul_inline(mad_fixed_t x, mad_fixed_t y)
  * This is faster than the default implementation via MAD_F_MLX() and
  * mad_f_scale64().
  */
+/*
 #  define mad_f_mul(x, y)  \
     ({ mad_fixed64hi_t __hi;  \
        mad_fixed64lo_t __lo;  \
@@ -263,7 +266,17 @@ mad_fixed_t mad_f_mul_inline(mad_fixed_t x, mad_fixed_t y)
 	    : "cc");  \
        __result;  \
     })
+*/
 # endif
+
+// r0=result, r0=x, r1=y, r2=__lo, r3=__hi
+__asm mad_fixed_t mad_f_mul(int x, int y)
+{
+  smull r2, r3, r0, r1
+  movs r2, r2, lsr #28 /* (MAD_F_SCALEBITS) */
+  adc r0, r2, r3, lsl #(32-28) /* (32 - MAD_F_SCALEBITS) */
+}
+#define mad_f_mul(x, y) mad_f_mul(x, y)
 
 #  define MAD_F_MLX(hi, lo, x, y)  \
     asm ("smull	%0, %1, %2, %3"  \

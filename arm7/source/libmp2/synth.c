@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.
@@ -541,10 +542,14 @@ void dct32(mad_fixed_t const in[32], unsigned int slot,
 #  endif
 # endif
 
+/*
 static
 mad_fixed_t const D[17][32] = {
 # include "D.dat"
 };
+*/
+
+#include "synth_ipc3.h"
 
 //mad_fixed_t const (*D)[32]=0;
 
@@ -589,7 +594,7 @@ void synth_full(struct mad_synth *synth, struct mad_frame const *frame,
       fx = &(*filter)[0][~phase & 1][0];
       fo = &(*filter)[1][~phase & 1][0];
 
-      Dptr = &D[0];
+      Dptr = (mad_fixed_t const (*)[32])&D[0];
 
       ptr = *Dptr + po;
       ML0(hi, lo, (*fx)[0], ptr[ 0]);
@@ -728,7 +733,7 @@ void synth_half(struct mad_synth *synth, struct mad_frame const *frame,
       fx = &(*filter)[0][~phase & 1][0];
       fo = &(*filter)[1][~phase & 1][0];
 
-      Dptr = &D[0];
+      Dptr = (mad_fixed_t const (*)[32])&D[0];
 
       ptr = *Dptr + po;
       ML0(hi, lo, (*fx)[0], ptr[ 0]);

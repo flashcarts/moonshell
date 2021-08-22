@@ -4,142 +4,174 @@
 #include <string.h>
 #include <NDS.h>
 
-#include "../filesys.h"
-#include "../memtool.h"
+#include "../libs/memtool.h"
 
 #include "../_console.h"
+#include "../_consoleWriteLog.h"
 
-#include "../../../ipc3.h"
+#include "../../../ipc6.h"
 
 #include "plug_mp2.h"
+#include "_dpgfs.h"
+#include "arm9tcm.h"
 
-#define SamplePerFrame (1152)
-
-#define ReadBufSize (4*1024)
+#define ReadBufSize (8*1024)
 
 static bool Initialized=false;
 
 void FreeMP2(void);
 
-static CStream *pCStream;
+static u64 MoveSample;
 
-static u32 MovePosition;
-static s64 MoveSample;
+#include "plug_mp2_synth_d.h"
 
-static u8 *pReadTempBuffer;
-
-bool StartMP2(CStream *_pCStream)
+static inline void IPCSYNC_Enabled(void)
 {
-  if(Initialized==true){
-    FreeMP2();
-  }
+  REG_IE|=IRQ_IPC_SYNC;
+}
+
+static inline void IPCSYNC_Disabled(void)
+{
+  REG_IE&=~IRQ_IPC_SYNC;
+}
+
+bool StartMP2(void)
+{
+  if(Initialized==true) FreeMP2();
   Initialized=true;
   
-  pCStream=_pCStream;
+  _consolePrint("Request ARM7 mp2 decode.\n");
   
-  _consolePrintf("Request ARM7 mp2 decode.\n");
+//  IPC6->psynth_d=(void*)D;
   
-  IPC3->IR=IR_NULL;
-  IPC3->IR_filesize=pCStream->GetSize();
-  IPC3->IR_readsize=0;
-  IPC3->IR_readbuf=(u8*)malloc(ReadBufSize);
-  IPC3->IR_readbufsize=0;
-  IPC3->IR_flash=false;
+  IPC6->IR=IR_NULL;
+  IPC6->IR_filesize=DPGFS_Audio_GetSize();
+  IPC6->IR_readsize=0;
+  IPC6->IR_readbuf=(u8*)malloc(ReadBufSize);
+  IPC6->IR_readbufsize=0;
+  IPC6->IR_flash=false;
+  IPC6->IR_EOF=false;
   
-  IPC3->IR_samples=0;
+  IPC6->IR_SyncSamples_SendToARM9=0;
   
-  MovePosition=0;
   MoveSample=0;
-  
-  IPC3->IR_readbufsize=pCStream->ReadBuffer(IPC3->IR_readbuf,ReadBufSize);
-  
-  pReadTempBuffer=(u8*)malloc(ReadBufSize);
   
   return(true);
 }
 
-u32 UpdateMP2(s16 *lbuf,s16 *rbuf)
-{
-  return(SamplePerFrame);
-}
-
 void FreeMP2(void)
 {
-  if(Initialized==true){
-    pCStream=NULL;
-    IPC3->IR_filesize=0;
-    IPC3->IR_readsize=0;
-    if(IPC3->IR_readbuf!=NULL){
-      free(IPC3->IR_readbuf); IPC3->IR_readbuf=NULL;
-    }
-    if(pReadTempBuffer!=NULL){
-      free(pReadTempBuffer); pReadTempBuffer=NULL;
-    }
-  }
+  if(Initialized==false) return;
   Initialized=false;
+  
+  IPC6->IR_filesize=0;
+  IPC6->IR_readsize=0;
+  if(IPC6->IR_readbuf!=NULL){
+    free(IPC6->IR_readbuf); IPC6->IR_readbuf=NULL;
+  }
 }
 
-u32 MP2_GetSamplePerFrame(void)
+void MP2_SetPosition(double per,u64 smp)
 {
-  return(SamplePerFrame);
-}
-
-void MP2_SetPosition(double per,s64 smp)
-{
-  MovePosition=(int)(pCStream->GetSize()*per);
-  if(MovePosition<0) MovePosition=0;
-  MovePosition&=~1;
+  if(Initialized==false) return;
+  
+  if(per<0) per=0;
   MoveSample=smp;
-  IPC3->IR_flash=true;
+  
+  REG_IE&=~IRQ_IPC_SYNC;
+  
+  u32 MovePosition=(u32)(DPGFS_Audio_GetSize()*per);
+  MovePosition&=~3;
+  
+  u8 *buf=(u8*)IPC6->IR_readbuf;
+  
+  DPGFS_Audio_SetOffset(MovePosition);
+  MovePosition=0;
+  
+  IPCSYNC_Disabled();
+  u32 ReadSize=DPGFS_Audio_Read32bit(&buf[0],ReadBufSize);
+  IPCSYNC_Enabled();
+  
+  if(DPGFS_Audio_GetSize()<=DPGFS_Audio_GetOffset()) IPC6->IR_EOF=true;
+  
+  IPC6->IR_readbufsize=ReadSize;
+  
+  IPC6->IR_flash=true;
+  
+  REG_IE|=IRQ_IPC_SYNC;
 }
 
 void MP2_LoadReadBuffer(void)
 {
-  if(IPC3->IR_flash==true) return;
+  if(Initialized==false) return;
   
-  u8 *buf=(u8*)IPC3->IR_readbuf;
-  int ReadSize=ReadBufSize-IPC3->IR_readbufsize;
+  if(IPC6->IR_flash==true) return;
+
+  IPCSYNC_Disabled();
+  
+//  _consolePrintf("fr%d,%d\n",IPC6->IR_readsize,IPC6->IR_readbufsize);
+  
+  u8 *buf=(u8*)IPC6->IR_readbuf;
+  int ReadSize=ReadBufSize-IPC6->IR_readbufsize;
   
   ReadSize&=~1;
-  if(ReadSize==0) return;
-  
-  REG_IME=0;
-  ReadSize=pCStream->ReadBuffer(&buf[IPC3->IR_readbufsize],ReadSize);
-  IPC3->IR_readbufsize+=ReadSize;
-  REG_IME=1;
-}
-
-void MP2_fread(void)
-{
-//  _consolePrintf("fr%d,%d",IPC3->IR_readsize,IPC3->IR_readbufsize);
-  
-  u8 *buf=(u8*)IPC3->IR_readbuf;
-  int size=IPC3->IR_readsize;
-  int remain=IPC3->IR_readbufsize-size;
-  
-  if(remain<=0){
-    remain=0;
-    }else{
-    DC_FlushRangeOverrun((void*)buf,ReadBufSize);
-    DMA0_SRC = (uint32)&buf[size];
-    DMA0_DEST = (uint32)&buf[0];
-    DMA0_CR = DMA_ENABLE | DMA_SRC_INC | DMA_DST_INC | DMA_16_BIT | (remain/2);
-//    while(DMA0_CR & DMA_BUSY);
+  if(ReadSize==0){
+    IPCSYNC_Enabled();
+    return;
   }
   
-  IPC3->IR_readbufsize=remain;
+  if(DPGFS_Audio_GetSize()<=DPGFS_Audio_GetOffset()) IPC6->IR_EOF=true;
+  
+  int ReadedSize=DPGFS_Audio_Read32bit(&buf[IPC6->IR_readbufsize],ReadSize);
+  DCache_CleanRangeOverrun(&buf[IPC6->IR_readbufsize],ReadSize);
+  
+  IPC6->IR_readbufsize+=ReadedSize;
+  
+  IPCSYNC_Enabled();
 }
 
-void MP2_fread_flash(void)
+CODE_IN_ITCM void IRQSYNC_MP2_flash(void)
 {
-//  _consolePrint("!");
-  
-  pCStream->SetOffset(MovePosition);
-  MovePosition=0;
-  
-  IPC3->IR_readbufsize=pCStream->ReadBuffer(IPC3->IR_readbuf,ReadBufSize-36); // fetch sector size.
-  
-  IPC3->IR_samples=MoveSample;
+  if(Initialized==false) return;
+  IPC6->IR_SyncSamples_SendToARM9=MoveSample;
   MoveSample=0;
 }
+
+CODE_IN_ITCM void IRQSYNC_MP2_fread(void)
+{
+  u8 *buf=(u8*)IPC6->IR_readbuf;
+  int size=IPC6->IR_readsize;
+  int remain=IPC6->IR_readbufsize-size;
+
+//  _consolePrintf("MP2_fread: readsize=%d, readbufsize=%d remain=%d.\n",IPC6->IR_readsize,IPC6->IR_readbufsize,remain);
+
+  if(remain<0){
+    _consolePrintf("MP2_fread: Readed buffer is short! readsize=%d, readbufsize=%d\n",IPC6->IR_readsize,IPC6->IR_readbufsize);
+    while(1);
+  }
+  
+  if(remain!=0){
+    //PrfStart();
+    DCache_CleanRangeOverrun((void*)&buf[size],remain*2);
+    DMA0_SRC = (uint32)&buf[size];
+    DMA0_DEST = (uint32)&buf[0];
+/*
+    if((DMA0_SRC&3)!=0){
+      _consolePrintf("align error. DMA0_SRC=0x%x\n",DMA0_SRC);
+      while(1);
+    }
+    if((DMA0_DEST&3)!=0){
+      _consolePrintf("align error. DMA0_DEST=0x%x\n",DMA0_DEST);
+      while(1);
+    }
+*/
+    DMA0_CR = DMA_ENABLE | DMA_SRC_INC | DMA_DST_INC | DMA_32_BIT | (remain/2);
+    DCache_FlushRangeOverrun((void*)&buf[0],remain*2);
+    //PrfEnd(remain);
+//    while(DMA0_CR & DMA_BUSY);
+  }
+
+  IPC6->IR_readbufsize=remain;
+}
+
 

@@ -9,30 +9,30 @@
 #define VRAMBuf ((u16*)&SPRITE_GFX_SUB[0])
 
 //a global copy of sprite attribute memory
-static SpriteEntry sprites_sub[128];
+static SpriteEntry sprites[12];
 
 //rotation attributes overlap so assign then to the same location
-static pSpriteRotation spriteRotations_SUB = (pSpriteRotation)sprites_sub;
+static pSpriteRotation spriteRotations = (pSpriteRotation)sprites;
 
 //turn off all the sprites
 static inline void initSprites(void)
 {
-  glMemSet16CPU(0, sprites_sub, 128 * sizeof(SpriteEntry));
+  glMemSet32CPU(0,OAM_SUB, 128 * sizeof(SpriteEntry));
+  glMemSet32CPU(0,sprites, 12 * sizeof(SpriteEntry));
   
   u32 i;
-  for(i = 0; i < 128; i++)
+  for(i = 0; i < 12; i++)
   {
-     sprites_sub[i].attribute[0] = ATTR0_DISABLED | 0;
-     sprites_sub[i].attribute[1] = 0 | 0;
-     sprites_sub[i].attribute[2] = 0;
-     sprites_sub[i].attribute[3] = 0;
+     sprites[i].attribute[0] = ATTR0_DISABLED | 0;
+     sprites[i].attribute[1] = 0 | 0;
+     sprites[i].attribute[2] = 0;
   }
   
-  for(i=0;i<32;i++){
-    spriteRotations_SUB[i].hdx=1*0x100;
-    spriteRotations_SUB[i].hdy=0*0x100;
-    spriteRotations_SUB[i].vdx=0*0x100;
-    spriteRotations_SUB[i].vdy=1*0x100;
+  for(i=0;i<12/4;i++){
+    spriteRotations[i].hdx=1*0x100;
+    spriteRotations[i].hdy=0*0x100;
+    spriteRotations[i].vdx=0*0x100;
+    spriteRotations[i].vdy=1*0x100;
   }
 
 }
@@ -41,26 +41,11 @@ static inline void initSprites(void)
 static inline void updateOAM(u32 Count)
 {
   DC_FlushAll();
-  glMemCopy16CPU(sprites_sub, OAM_SUB, Count * sizeof(SpriteEntry));
+  glMemCopy32CPU(sprites, OAM_SUB, Count * sizeof(SpriteEntry));
 }
 
-static inline void SetPosSprite(u32 objno,s32 x,s32 y,bool EnabledBlend,u32 FlipMode)
+static inline void SetPosSprite(u32 objno,s32 x,s32 y,bool EnabledBlend)
 {
-  switch(FlipMode){
-    case 0: {
-    } break;
-    case 1: {
-      x=256-64-x;
-      y=192-64-y;
-    } break;
-    case 2: {
-      y=192-64-y;
-    } break;
-    case 3: {
-      x=256-64-x;
-    } break;
-  }
-  
   u32 sx=x;
   u32 sy=y;
   
@@ -73,53 +58,32 @@ static inline void SetPosSprite(u32 objno,s32 x,s32 y,bool EnabledBlend,u32 Flip
   sx=x & (512-1);
   sy=y & (256-1);
   
-  u16 attr0=0;
-  u16 attr1=0;
-  
-  attr0|=ATTR0_NORMAL | ATTR0_BMP | ATTR0_SQUARE | sy;
-  
+  u16 attr0=ATTR0_NORMAL | ATTR0_BMP | ATTR0_SQUARE | sy;
   if(EnabledBlend==false){
     attr0|=ATTR0_TYPE_NORMAL;
     }else{
     attr0|=ATTR0_TYPE_BLENDED;
   }
-  
-  attr1|=ATTR1_ROTDATA(0) | ATTR1_SIZE_64 | sx;
-  
-  switch(FlipMode){
-    case 0: {
-    } break;
-    case 1: {
-      attr1|=ATTR1_FLIP_X | ATTR1_FLIP_Y;
-    } break;
-    case 2: {
-      attr1|=ATTR1_FLIP_Y;
-    } break;
-    case 3: {
-      attr1|=ATTR1_FLIP_X;
-    } break;
-  }
-  
-  sprites_sub[objno].attribute[0] = attr0;
-  sprites_sub[objno].attribute[1] = attr1;
+  sprites[objno].attribute[0] = attr0;
+  sprites[objno].attribute[1] = ATTR1_ROTDATA(0) | ATTR1_SIZE_64 | sx;
 }
 
 static inline void HiddenSprite(u32 objno)
 {
-  sprites_sub[objno].attribute[0] = ATTR0_DISABLED;
+  sprites[objno].attribute[0] = ATTR0_DISABLED;
 }
 
 static inline void SetSprite(u32 objno,u32 Priority,u32 num,u16 alpha)
 {
-  sprites_sub[objno].attribute[2] = ATTR2_PRIORITY(Priority) | ATTR2_ALPHA(alpha) | num;
+  sprites[objno].attribute[2] = ATTR2_PRIORITY(Priority) | ATTR2_ALPHA(alpha) | num;
 }
 
-void SubDisplay_Init(bool EnabledBlend,u16 alpha,u32 FlipMode)
+static void SpriteInit(bool EnabledBlend,u16 alpha)
 {
   if(EnabledBlend==false) alpha=15;
   
   initSprites();
-  updateOAM(128);
+  updateOAM(12);
   
   s32 spx[12],spy[12];
   
@@ -137,7 +101,7 @@ void SubDisplay_Init(bool EnabledBlend,u16 alpha,u32 FlipMode)
   spx[11]=3; spy[11]=2;
   
   for(u32 idx=0;idx<12;idx++){
-    SetSprite(idx,0,(8*spx[idx])+((8*8*4)*spy[idx]),alpha);
+    SetSprite(idx,1,(8*8)+(8*spx[idx])+((8*8*4)*spy[idx]),alpha);
     
     s32 px=spx[idx];
     s32 py=spy[idx];
@@ -145,7 +109,7 @@ void SubDisplay_Init(bool EnabledBlend,u16 alpha,u32 FlipMode)
     px*=64;
     py*=64;
     
-    SetPosSprite(idx,(s32)px,(s32)py,EnabledBlend,FlipMode);
+    SetPosSprite(idx,(s32)px,(s32)py,EnabledBlend);
   }
   
   updateOAM(12);
@@ -153,13 +117,11 @@ void SubDisplay_Init(bool EnabledBlend,u16 alpha,u32 FlipMode)
 
 CglScreenSub::CglScreenSub(void)
 {
-  pCanvas=new CglCanvas(VRAMBuf,ScreenWidth,ScreenHeight,pf15bit);
+  pCanvas=new CglCanvas(&VRAMBuf[16*256],ScreenWidth,ScreenHeight,pf15bit);
   pCanvas->SetColor(RGB15(0,0,0));
-  pCanvas->FillBox(0,0,ScreenWidth,ScreenHeight);
+  glMemSet32CPU(RGB15(0,0,0),(u32*)pCanvas->GetScanLine(0),ScreenWidth*ScreenHeight*2);
   
-  FlipMode=0; // Normal
-  
-  SubDisplay_Init(false,15,FlipMode);
+  SpriteInit(false,15);
 }
 
 CglScreenSub::~CglScreenSub(void)
@@ -169,12 +131,12 @@ CglScreenSub::~CglScreenSub(void)
 
 u16* CglScreenSub::GetVRAMBuf(void) const
 {
-  return(VRAMBuf);
+  return(&VRAMBuf[16*256]);
 }
 
-void CglScreenSub::SetFlipMode(u32 _FlipMode)
+void CglScreenSub::SetBlackOutLevel16(const int Level16)
 {
-  FlipMode=_FlipMode;
-  
-  SubDisplay_Init(false,15,FlipMode);
+      SUB_BLEND_CR=BLEND_FADE_BLACK | BLEND_SRC_SPRITE;
+      SUB_BLEND_Y=Level16;
 }
+

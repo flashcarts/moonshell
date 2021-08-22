@@ -22,7 +22,10 @@ extern void glDefaultClassFree(void);
 
 extern void glSetFuncDebugPrint(void (*_DebugPrint)(const char* s));
 
-void glDebugPrintf(const char* format, ...);
+//void glDebugPrintf(const char* format, ...);
+
+extern void _consolePrintf(const char* format, ...);
+#define glDebugPrintf _consolePrintf
 
 #endif
 

@@ -1,3 +1,4 @@
+#ifdef USE_MP2
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -5,42 +6,27 @@
 
 #include <NDS.h>
 
-# include "libmp2/mad.h"
-
 #include "memtoolARM7.h"
-
+#include "_console.h"
 #include "filesys.h"
 
-#ifndef USE_MP2
+#include "libmp2/frame.h"
+#include "libmp2/synth.h"
+#include "libmp2/mad.h"
 
-void MP2_SetFunc_consolePrintf(u32 adr){};
+#include "plug_mp2.h"
 
-bool StartMP2(void){};
-void FlashFileBufferMP2(void){};
-u32 UpdateMP2(s16 *lbuf,s16 *rbuf,bool flash){return(0);};
-void FreeMP2(void){};
-
-u32 MP2_GetChannelCount(void){return(0);};
-u32 MP2_GetSampleRate(void){return(0);};
-u32 MP2_GetSamplePerFrame(void){return(0);};
-
-#else
+#pragma Ospace
 
 // --------------------------------------------------------------------
 
 typedef struct mad_decoder Tmad_decoder;
 
-static Tmad_decoder StaticMadDecoder;
+static Tmad_decoder *pMadDecoder;
 
 static bool EndFlag;
 
-#define FULLRATE
-
-#ifdef FULLRATE
-#define SamplePerFrame (1152/1)
-#else
-#define SamplePerFrame (1152/2)
-#endif
+#define SamplePerFrame (1152*1)
 
 // --------------------------------------------------------------------
 
@@ -48,9 +34,10 @@ static s16 *outlbuf,*outrbuf;
 static u32 outofs;
 static s16 outlastl,outlastr;
 
-#define INPUT_BUFFER_SIZE (2*1024)
+#define INPUT_BUFFER_SIZE (8*1024)
 static u8 *InputBuffer=NULL;
 
+#pragma Otime
 static
 enum mad_flow input(void *data,
                     struct mad_stream *stream)
@@ -75,15 +62,20 @@ enum mad_flow input(void *data,
     Remaining=0;
   }
   
-  ReadSize=FileSys_fread(ReadStart,ReadSize);
+  ReadSize=FileSys_MP2_fread(ReadStart,ReadSize);
   
   if(ReadSize==0) return MAD_FLOW_STOP;
   
 //  _consolePrintf("r%d->%d\n",Remaining,ReadSize);
   
+/*
+  while(((DMA1_CR&DMA_ENABLE)!=0)||((DMA2_CR&DMA_ENABLE)!=0)){
+  }
+*/
+  
   mad_stream_buffer(stream,InputBuffer,ReadSize+Remaining);
   
-  stream->error=0;
+  stream->error=MAD_ERROR_NONE;
   
   return MAD_FLOW_CONTINUE;
 }
@@ -103,7 +95,9 @@ signed int scale(mad_fixed_t sample)
   /* quantize */
   return sample >> (MAD_F_FRACBITS + 1 - 16);
 }
+#pragma Ospace
 
+#pragma Otime
 static
 enum mad_flow output(void *data,
                      struct mad_header const *header,
@@ -119,10 +113,12 @@ enum mad_flow output(void *data,
   left_ch   = pcm->samples[0];
   right_ch  = pcm->samples[1];
 
+/*
   if(nsamples!=SamplePerFrame){
-//    _consolePrintf("nsamples==%d!=%d\n",nsamples,SamplePerFrame);
-//    return MAD_FLOW_STOP;
+    _consolePrintf("nsamples==%d!=%d\n",nsamples,SamplePerFrame);
+    return MAD_FLOW_STOP;
   }
+*/
   
   if((outlbuf==NULL)||(outrbuf==NULL)){
     outofs+=nsamples;
@@ -135,43 +131,24 @@ enum mad_flow output(void *data,
     while (nsamples--) {
       *lbuf++=*rbuf++=scale(*left_ch++);
     }
+    outlbuf=lbuf; outrbuf=rbuf;
     return MAD_FLOW_CONTINUE;
   }
 
   if (nchannels == 2) {
     outofs+=nsamples;
     s16 *lbuf=outlbuf,*rbuf=outrbuf;
-    
-    // oversampling 1x
     while (nsamples--) {
       *lbuf++=scale(*left_ch++);
       *rbuf++=scale(*right_ch++);
     }
-    
-/*
-    // oversampling 2x
-    s16 lastl=outlastl,lastr=outlastr;
-    while (nsamples--) {
-      s16 smp;
-      
-      smp=scale(*left_ch++);
-      *lbuf++=lastl;
-      *lbuf++=(lastl+smp)/2;
-      lastl=smp;
-      
-      smp=scale(*right_ch++);
-      *rbuf++=lastr;
-      *rbuf++=(lastr+smp)/2;
-      lastr=smp;
-    }
-    outlastl=lastl;
-    outlastr=lastr;
-*/
+    outlbuf=lbuf; outrbuf=rbuf;
     return MAD_FLOW_CONTINUE;
   }
 
   return MAD_FLOW_STOP;
 }
+#pragma Ospace
 
 static
 enum mad_flow error(void *data,
@@ -198,8 +175,7 @@ enum mad_flow error(void *data,
 #define madusr_ExecReturn_End (-1)
 #define madusr_ExecReturn_Fail (-2)
 
-static
-int madusr_decode_init(struct mad_decoder *decoder)
+static int madusr_decode_init(struct mad_decoder *decoder)
 {
   decoder->sync = NULL;
   
@@ -207,10 +183,7 @@ int madusr_decode_init(struct mad_decoder *decoder)
   
   mad_decoder_init(decoder, NULL, input, 0 /* header */, 0 /* filter */, output, error, 0 /* message */);
   
-#ifdef FULLRATE
-#else
-  decoder->options|=MAD_OPTION_HALFSAMPLERATE;
-#endif
+//  decoder->options|=MAD_OPTION_HALFSAMPLERATE;
   
   if (decoder->input_func == 0) return madusr_Return_NG;
   if (decoder->output_func == 0) return madusr_Return_NG;
@@ -220,7 +193,7 @@ int madusr_decode_init(struct mad_decoder *decoder)
   struct mad_frame *frame;
   struct mad_synth *synth;
   
-  decoder->sync = safemalloc(sizeof(*decoder->sync));
+  decoder->sync = (struct mad_decoder_sync*)safemalloc(sizeof(*decoder->sync));
   
   if (decoder->sync == NULL) return madusr_Return_NG;
   
@@ -239,6 +212,7 @@ int madusr_decode_init(struct mad_decoder *decoder)
   return madusr_Return_OK;
 }
 
+#pragma Otime
 static
 int madusr_decode_exec(struct mad_decoder *decoder)
 {
@@ -364,6 +338,7 @@ int madusr_decode_exec(struct mad_decoder *decoder)
   
   return madusr_ExecReturn_Next;
 }
+#pragma Ospace
 
 static
 void madusr_decode_free(struct mad_decoder *decoder)
@@ -390,38 +365,36 @@ void madusr_decode_free(struct mad_decoder *decoder)
 
 // --------------------------------------------------------------------
 
-static bool Initialized=false;
-
 void FreeMP2(void);
-
-static u32 BitRate;
 
 bool StartMP2(void)
 {
-  if(Initialized==true){
-    FreeMP2();
-  }
-  Initialized=true;
+  FreeMP2();
   
-  EndFlag=false;
-  
-  static u8 ibuf[INPUT_BUFFER_SIZE+MAD_BUFFER_GUARD]={1,};
-  InputBuffer=ibuf;
-  
-//  InputBuffer=(u8*)safemalloc(INPUT_BUFFER_SIZE+MAD_BUFFER_GUARD);
-  if(InputBuffer==NULL){
-//    _consolePrintf("InputBuffer out of memory.\n");
+  pMadDecoder=(Tmad_decoder*)safemalloc(sizeof(Tmad_decoder));
+  if(pMadDecoder==NULL){
+    _consolePrintf("Tmad_decoder out of memory.\n");
     FreeMP2();
     return(false);
   }
   
-//  _consolePrintf("libmad init.\n");
+  EndFlag=false;
+  
+  InputBuffer=(u8*)safemalloc(INPUT_BUFFER_SIZE+MAD_BUFFER_GUARD);
+  
+  if(InputBuffer==NULL){
+    _consolePrintf("InputBuffer out of memory.\n");
+    FreeMP2();
+    return(false);
+  }
+  
+  _consolePrintf("libmad init.\n");
   
   int result;
   
-  result=madusr_decode_init(&StaticMadDecoder);
+  result=madusr_decode_init(pMadDecoder);
   if(result==madusr_Return_NG){
-//    _consolePrintf("madusr_decode_init()==madusr_Return_NG.\n");
+    _consolePrintf("madusr_decode_init()==madusr_Return_NG.\n");
     FreeMP2();
     return(false);
   }
@@ -432,92 +405,69 @@ bool StartMP2(void)
   outlastl=0;
   outlastr=0;
   
-  result=madusr_decode_exec(&StaticMadDecoder);
+  result=madusr_decode_exec(pMadDecoder);
   if(result!=madusr_ExecReturn_Next){
-//    _consolePrintf("madusr_decode_exec()==%d!=madusr_ExecReturn_Next.\n",result);
+    _consolePrintf("madusr_decode_exec()==%d!=madusr_ExecReturn_Next.\n",result);
     FreeMP2();
     return(false);
   }
   
   struct mad_frame *frame;
   
-  frame  = &StaticMadDecoder.sync->frame;
+  frame  = &pMadDecoder->sync->frame;
   
-//  _consolePrintf("\n");
+/*
+  _consolePrintf("\n");
   
-//  _consolePrintf("Format=");
+  _consolePrintf("Format=");
   switch(frame->header.layer){
     case MAD_LAYER_I:
-//      _consolePrintf("Layer I\n");
+      _consolePrintf("Layer I\n");
       break;
     case MAD_LAYER_II:
-//      _consolePrintf("Layer II\n");
+      _consolePrintf("Layer II\n");
       break;
     case MAD_LAYER_III:
-//      _consolePrintf("Layer III\n");
+      _consolePrintf("Layer III\n");
       break;
     default:
-//      _consolePrintf("unknown layer.\n");
+      _consolePrintf("unknown layer.\n");
       FreeMP2();
       return(false);
       break;
   }
 
-//  _consolePrintf("ChannelMode=");
+  _consolePrintf("ChannelMode=");
   switch(frame->header.mode){
     case MAD_MODE_SINGLE_CHANNEL:
-//      _consolePrintf("SingleChannel\n");
+      _consolePrintf("SingleChannel\n");
       break;
     case MAD_MODE_DUAL_CHANNEL:
-//      _consolePrintf("DualChannel\n");
+      _consolePrintf("DualChannel\n");
       break;
     case MAD_MODE_JOINT_STEREO:
-//      _consolePrintf("JointStereo\n");
+      _consolePrintf("JointStereo\n");
       break;
     case MAD_MODE_STEREO:
-//      _consolePrintf("Normal LR Stereo\n");
+      _consolePrintf("Normal LR Stereo\n");
       break;
     default:
-//      _consolePrintf("unknown ChannelMode.\n");
+      _consolePrintf("unknown ChannelMode.\n");
       FreeMP2();
       return(false);
       break;
   }
   
-//  _consolePrintf("BitRate=%dkbps\n",frame->header.bitrate/1000);
-//  _consolePrintf("SampleRate=%dHz\n",frame->header.samplerate);
-  
-  BitRate=frame->header.bitrate/1000;
+  _consolePrintf("SampleRate=%dHz\n",frame->header.samplerate);
+*/
   
   return(true);
 }
 
-void FlashFileBufferMP2(void)
-{
-  struct mad_stream *stream=&StaticMadDecoder.sync->stream;
-  
-  size_t ReadSize,Remaining;
-  u8 *ReadStart;
-  
-  ReadSize=INPUT_BUFFER_SIZE;
-  ReadStart=InputBuffer;
-  Remaining=0;
-  
-  ReadSize=FileSys_fread_flash(ReadStart,ReadSize);
-  
-  if((ReadSize+Remaining)==0){
-    EndFlag=true;
-    return;
-  }
-  
-  mad_stream_buffer(stream,InputBuffer,ReadSize+Remaining);
-}
-
+#pragma Otime
 u32 UpdateMP2(s16 *lbuf,s16 *rbuf)
 {
-  if(Initialized==false) return(0);
-  
-  if(EndFlag==true){
+  if((pMadDecoder==NULL)||(EndFlag==true)){
     int idx;
     for(idx=0;idx<SamplePerFrame;idx++){
       *lbuf++=*rbuf++=0;
@@ -525,57 +475,51 @@ u32 UpdateMP2(s16 *lbuf,s16 *rbuf)
     return(0);
   }
   
-  int result;
-  
   outlbuf=lbuf;
   outrbuf=rbuf;
   outofs=0;
   
-  result=madusr_ExecReturn_Next;
+  int result=madusr_ExecReturn_Next;
   
   while((result==madusr_ExecReturn_Next)&&(outofs<SamplePerFrame)){
-    result=madusr_decode_exec(&StaticMadDecoder);
+    result=madusr_decode_exec(pMadDecoder);
   }
+  
+//  if(outofs<SamplePerFrame) _consolePrintf("Render rest. %d,%d\n",outofs,SamplePerFrame);
   
   if(result!=madusr_ExecReturn_Next){
     EndFlag=true;
-    int idx;
-    for(idx=0;idx<SamplePerFrame;idx++){
-      *lbuf++=*rbuf++=0;
-    }
-    if(result==madusr_ExecReturn_End){
-//      _consolePrintf("ExecReturn_End\n");
-      return(0);
-    }
-    if(result==madusr_ExecReturn_Fail){
-//      _consolePrintf("ExecReturn_Fail\n");
-      return(0);
-    }
+    if(result==madusr_ExecReturn_End) _consolePrintf("ExecReturn_End\n");
+    if(result==madusr_ExecReturn_Fail) _consolePrintf("ExecReturn_Fail\n");
+  }
+  
+  for(u32 idx=outofs;idx<SamplePerFrame;idx++){
+    *lbuf++=*rbuf++=0;
   }
   
   return(outofs);
 }
+#pragma Ospace
 
 void FreeMP2(void)
 {
-  if(Initialized==true){
-    EndFlag=true;
-    madusr_decode_free(&StaticMadDecoder);
-/*
-    if(InputBuffer!=NULL){
-      safefree(InputBuffer); InputBuffer=NULL;
-    }
-*/
-    InputBuffer=NULL;
+  EndFlag=true;
+  
+  if(pMadDecoder!=NULL){
+    madusr_decode_free(pMadDecoder);
+    safefree(pMadDecoder); pMadDecoder=NULL;
   }
-  Initialized=false;
+  
+  if(InputBuffer!=NULL){
+    safefree(InputBuffer); InputBuffer=NULL;
+  }
 }
 
 u32 MP2_GetChannelCount(void)
 {
   struct mad_frame *frame;
   
-  frame  = &StaticMadDecoder.sync->frame;
+  frame  = &pMadDecoder->sync->frame;
   
   switch(frame->header.mode){
     case MAD_MODE_SINGLE_CHANNEL:
@@ -600,23 +544,14 @@ u32 MP2_GetSampleRate(void)
 {
   struct mad_frame *frame;
   
-  frame  = &StaticMadDecoder.sync->frame;
+  frame  = &pMadDecoder->sync->frame;
   
-#ifdef FULLRATE
-  return(frame->header.samplerate/1);
-#else
-  return(frame->header.samplerate/2);
-#endif
+  return(frame->header.samplerate);
 }
 
 u32 MP2_GetSamplePerFrame(void)
 {
   return(SamplePerFrame);
-}
-
-u32 MP2_GetBitRate(void)
-{
-  return(BitRate);
 }
 
 #endif

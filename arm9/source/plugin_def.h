@@ -1,4 +1,9 @@
 
+#include "_console.h"
+#include "memtool.h"
+
+#if 0
+
 #ifndef plugin_def_h
 #define plugin_def_h
 
@@ -66,28 +71,12 @@
 #define _consolePrintf (pStdLib->_consolePrintf)
 #define _consolePrintSet (pStdLib->_consolePrintSet)
 #define ShowLogHalt (pStdLib->ShowLogHalt)
-#define MWin_ProgressShow (pStdLib->MWin_ProgressShow)
-#define MWin_ProgressSetPos (pStdLib->MWin_ProgressSetPos)
-#define MWin_ProgressHide (pStdLib->MWin_ProgressHide)
-#define GetINIData (pStdLib->GetINIData)
-#define GetINISize (pStdLib->GetINISize)
-#define GetBINData (pStdLib->GetBINData)
-#define GetBINSize (pStdLib->GetBINSize)
 
-#define DC_FlushRangeOverrun (pStdLib->DC_FlushRangeOverrun)
 #define MemCopy8CPU (pStdLib->MemCopy8CPU)
 #define MemCopy16CPU (pStdLib->MemCopy16CPU)
 #define MemCopy32CPU (pStdLib->MemCopy32CPU)
 #define MemSet16CPU (pStdLib->MemSet16CPU)
 #define MemSet32CPU (pStdLib->MemSet32CPU)
-#define MemCopy16DMA3 (pStdLib->MemCopy16DMA3)
-#define MemCopy32DMA3 (pStdLib->MemCopy32DMA3)
-#define MemSet16DMA3 (pStdLib->MemSet16DMA3)
-#define MemSet32DMA3 (pStdLib->MemSet32DMA3)
-#define MemSet8DMA3 (pStdLib->MemSet8DMA3)
-#define MemCopy16DMA2 (pStdLib->MemCopy16DMA2)
-#define MemSet16DMA2 (pStdLib->MemSet16DMA2)
-#define MemCopy32swi256bit (pStdLib->MemCopy32swi256bit)
 #define safemalloc (pStdLib->safemalloc)
 #define safefree (pStdLib->safefree)
 
@@ -141,17 +130,7 @@
 #define strtok (pStdLib->strtok)
 #define strxfrm (pStdLib->strxfrm)
 
-#define GetBINFileHandle (pStdLib->GetBINFileHandle)
-#define msp_fopen (pStdLib->msp_fopen)
-#define msp_fclose (pStdLib->msp_fclose)
-
-#define extmem_SetCount (pStdLib->extmem_SetCount)
-#define extmem_Exists (pStdLib->extmem_Exists)
-#define extmem_Alloc (pStdLib->extmem_Alloc)
-#define extmem_Write (pStdLib->extmem_Write)
-#define extmem_Read (pStdLib->extmem_Read)
-
-#define formdt_FormatDate (pStdLib->formdt_FormatDate)
+#endif
 
 #endif
 

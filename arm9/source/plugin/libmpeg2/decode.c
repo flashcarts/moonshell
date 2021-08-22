@@ -29,18 +29,18 @@
 
 #include <string.h>	/* memcmp/memset, try to remove */
 #include <stdlib.h>
-#include <inttypes.h>
+#include "inttypes.h"
 
 #include "mpeg2.h"
 #include "attributes.h"
 #include "mpeg2_internal.h"
 
+#define inline __forceinline
+
 static const int mpeg2_accels = 0;
 
 //#define BUFFER_SIZE (1194 * 1024)
 #define BUFFER_SIZE (128 * 1024)
-
-#include "../../arm9tcm.h"
 
 const mpeg2_info_t * mpeg2_info (mpeg2dec_t * mpeg2dec)
 {
@@ -79,8 +79,6 @@ static inline int skip_chunk (mpeg2dec_t * mpeg2dec, int bytes)
     return 0;
 }
 
-#include "../_console.h"
-
 static inline int copy_chunk (mpeg2dec_t * mpeg2dec, int bytes)
 {
     uint8_t * current;
@@ -111,8 +109,7 @@ static inline int copy_chunk (mpeg2dec_t * mpeg2dec, int bytes)
 	    static int maxsize=0;
 	    int chunksize=(int)mpeg2dec->chunk_ptr-(int)mpeg2dec->chunk_start;
 	    if(maxsize<chunksize) maxsize=chunksize;
-	    _consolePrintOne("ChunkSize=%d",maxsize);
-	    _consolePrintOne(",%d\n",chunksize);
+	    _consolePrintf("ChunkSize=%d,%d\n",maxsize,chunksize);
 */
 	    return copied;
 	}
@@ -166,74 +163,70 @@ mpeg2_state_t mpeg2_seek_header (mpeg2dec_t * mpeg2dec)
 
 #define RECEIVED(code,state) (((state) << 8) + (code))
 
-mpeg2_state_t mpeg2_parse (mpeg2dec_t * mpeg2dec)
+CODE_IN_ITCM mpeg2_state_t mpeg2_parse (mpeg2dec_t * mpeg2dec)
 {
-    int size_buffer, size_chunk, copied;
+  int size_buffer, size_chunk, copied;
 
-    if (mpeg2dec->action) {
-	mpeg2_state_t state;
+  if (mpeg2dec->action) {
+    mpeg2_state_t state;
 
-	state = mpeg2dec->action (mpeg2dec);
-	if ((int)state >= 0)
-	    return state;
-    }
+	  state = mpeg2dec->action (mpeg2dec);
+	  if ((int)state >= 0) return state;
+  }
 
-    while (1) {
-	while ((unsigned) (mpeg2dec->code - mpeg2dec->first_decode_slice) <
-	       mpeg2dec->nb_decode_slices) {
-	    size_buffer = mpeg2dec->buf_end - mpeg2dec->buf_start;
-	    size_chunk = (mpeg2dec->chunk_buffer + BUFFER_SIZE -
-			  mpeg2dec->chunk_ptr);
-	    if (size_buffer <= size_chunk) {
-		copied = copy_chunk (mpeg2dec, size_buffer);
-		if (!copied) {
-		    mpeg2dec->bytes_since_tag += size_buffer;
-		    mpeg2dec->chunk_ptr += size_buffer;
-		    return STATE_BUFFER;
-		}
-	    } else {
-		copied = copy_chunk (mpeg2dec, size_chunk);
-		if (!copied) {
-		    /* filled the chunk buffer without finding a start code */
-		    mpeg2dec->bytes_since_tag += size_chunk;
-		    mpeg2dec->action = seek_chunk;
-		    return STATE_INVALID;
-		}
+  while (1) {
+  	while ((unsigned) (mpeg2dec->code - mpeg2dec->first_decode_slice) < mpeg2dec->nb_decode_slices) {
+      size_buffer = mpeg2dec->buf_end - mpeg2dec->buf_start;
+	    size_chunk = (mpeg2dec->chunk_buffer + BUFFER_SIZE - mpeg2dec->chunk_ptr);
+  	  if (size_buffer <= size_chunk) {
+	  	  copied = copy_chunk (mpeg2dec, size_buffer);
+		    if (!copied) {
+  		    mpeg2dec->bytes_since_tag += size_buffer;
+	  	    mpeg2dec->chunk_ptr += size_buffer;
+		      return STATE_BUFFER;
+  		  }
+	      } else {
+		    copied = copy_chunk (mpeg2dec, size_chunk);
+		    if (!copied) {
+  		    /* filled the chunk buffer without finding a start code */
+	  	    mpeg2dec->bytes_since_tag += size_chunk;
+		      mpeg2dec->action = seek_chunk;
+		      return STATE_INVALID;
+  		  }
 	    }
 	    mpeg2dec->bytes_since_tag += copied;
 
-	    mpeg2_slice ((mpeg2dec->decoder), mpeg2dec->code,
-			 mpeg2dec->chunk_start);
+  	  if(mpeg2_slice_start ((mpeg2dec->decoder), mpeg2dec->code, mpeg2dec->chunk_start)==true){
+  	    mpeg2_slice ((mpeg2dec->decoder), mpeg2dec->code, mpeg2dec->chunk_start);
+  	  }
 	    mpeg2dec->code = mpeg2dec->buf_start[-1];
 	    mpeg2dec->chunk_ptr = mpeg2dec->chunk_start;
-	}
-	if ((unsigned) (mpeg2dec->code - 1) >= 0xb0 - 1)
-	    break;
-	if (seek_chunk (mpeg2dec) == STATE_BUFFER)
-	    return STATE_BUFFER;
-    }
+  	}
+	  if ((unsigned) (mpeg2dec->code - 1) >= 0xb0 - 1) break;
+  	if (seek_chunk (mpeg2dec) == STATE_BUFFER) return STATE_BUFFER;
+  }
 
-    switch (mpeg2dec->code) {
+  switch (mpeg2dec->code) {
     case 0x00:
-	mpeg2dec->action = mpeg2_header_picture_start;
-	return mpeg2dec->state;
+	    mpeg2dec->action = mpeg2_header_picture_start;
+	    return mpeg2dec->state;
     case 0xb7:
-	mpeg2dec->action = mpeg2_header_end;
-	break;
+	    mpeg2dec->action = mpeg2_header_end;
+      break;
     case 0xb3:
     case 0xb8:
-	mpeg2dec->action = mpeg2_parse_header;
-	break;
+      mpeg2dec->action = mpeg2_parse_header;
+	    break;
     default:
-	mpeg2dec->action = seek_chunk;
-	return STATE_INVALID;
-    }
-    return (mpeg2dec->state == STATE_SLICE) ? STATE_SLICE : STATE_INVALID;
+	    mpeg2dec->action = seek_chunk;
+      return STATE_INVALID;
+  }
+  return (mpeg2dec->state == STATE_SLICE) ? STATE_SLICE : STATE_INVALID;
 }
 
-mpeg2_state_t mpeg2_parse_header (mpeg2dec_t * mpeg2dec)
+CODE_IN_ITCM mpeg2_state_t mpeg2_parse_header (mpeg2dec_t * mpeg2dec)
 {
-    static int (* process_header[]) (mpeg2dec_t * mpeg2dec) = {
+    static DATA_IN_MTCM_SET int (* process_header[]) (mpeg2dec_t * mpeg2dec) = {
 	mpeg2_header_picture, mpeg2_header_extension, mpeg2_header_user_data,
 	mpeg2_header_sequence, NULL, NULL, NULL, NULL, mpeg2_header_gop
     };
@@ -446,9 +439,13 @@ void mpeg2_reset (mpeg2dec_t * mpeg2dec, int full_reset)
 
 }
 
-static DATA_IN_DTCM u8 buf1[sizeof(mpeg2dec_t)];
-static DATA_IN_DTCM u8 buf2[sizeof(mpeg2_decoder_t)];
-static DATA_IN_DTCM u8 buf3[sizeof(motions_t)];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf1[sizeof(mpeg2dec_t)];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf2[sizeof(mpeg2_decoder_t)];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf3[sizeof(motions_t)];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf4[32*64*2];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf5[32*64*2];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf6[32*64*2];
+static DATA_IN_MTCM_VAR ATTR_ALIGN16 u8 buf7[32*64*2];
 
 mpeg2dec_t * mpeg2_init (void)
 {
@@ -458,26 +455,58 @@ mpeg2dec_t * mpeg2_init (void)
 
 //    mpeg2dec = (mpeg2dec_t *) mpeg2_malloc (sizeof (mpeg2dec_t), MPEG2_ALLOC_MPEG2DEC);
     mpeg2dec = (mpeg2dec_t *) buf1;
+    memset (mpeg2dec,0,sizeof(mpeg2dec_t));
     
 //    mpeg2dec->decoder = (mpeg2_decoder_t *) mpeg2_malloc (sizeof (mpeg2_decoder_t), MPEG2_ALLOC_MPEG2DEC);
     mpeg2dec->decoder = (mpeg2_decoder_t *) buf2;
+    memset (mpeg2dec->decoder,0,sizeof(mpeg2_decoder_t));
     
 //    mpeg2dec->decoder->motions = (motions_t *) mpeg2_malloc (sizeof (motions_t), MPEG2_ALLOC_MPEG2DEC);
     mpeg2dec->decoder->motions = (motions_t *) buf3;
+    memset (mpeg2dec->decoder->motions,0,sizeof(motions_t));
     
-    mpeg2dec->decoder->quantizer_prescale[0] = (void *) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
-    mpeg2dec->decoder->quantizer_prescale[1] = (void *) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
-    mpeg2dec->decoder->quantizer_prescale[2] = (void *) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
-    mpeg2dec->decoder->quantizer_prescale[3] = (void *) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
+    mpeg2dec->decoder->quantizer_prescale[0] = (uint16_t(*)[32][64]) buf4;
+    mpeg2dec->decoder->quantizer_prescale[1] = (uint16_t(*)[32][64]) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
+    mpeg2dec->decoder->quantizer_prescale[2] = (uint16_t(*)[32][64]) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
+    mpeg2dec->decoder->quantizer_prescale[3] = (uint16_t(*)[32][64]) mpeg2_malloc (32*64*2, MPEG2_ALLOC_MPEG2DEC);
+    
+    for(u32 idx=0;idx<4;idx++){
+      memset (mpeg2dec->decoder->quantizer_prescale[idx],0,32*64*2);
+    }
 
     memset (mpeg2dec->decoder->DCTblock, 0, 64 * sizeof (int16_t));
     memset (mpeg2dec->quantizer_matrix, 0, 4 * 64 * sizeof (uint8_t));
 
     mpeg2dec->chunk_buffer = (uint8_t *) mpeg2_malloc (BUFFER_SIZE + 4, MPEG2_ALLOC_CHUNK);
+    memset (mpeg2dec->chunk_buffer,0,BUFFER_SIZE + 4);
 
     mpeg2dec->sequence.width = (unsigned)-1;
     mpeg2_reset (mpeg2dec, 1);
+    
+    /*
+    _consolePrintf("sizeof(mpeg2dec_t)=%d\n",sizeof(mpeg2dec_t));
+    _consolePrintf("sizeof(mpeg2_decoder_t)=%d\n",sizeof(mpeg2_decoder_t));
+    _consolePrintf("sizeof(motions_t)=%d\n",sizeof(motions_t));
 
+    {
+	  mpeg2dec_t *pt=0;
+      _consolePrintf("%d %d,%d,%d\n",&pt->new_sequence,sizeof(mpeg2_sequence_t),sizeof(mpeg2_gop_t),sizeof(mpeg2_picture_t));
+	}
+	*/
+	
+	/*
+	sizeof(mpeg2dec_t)=1100
+    _consolePrintf("sizeof(mpeg2_decoder_t)=196
+    _consolePrintf("sizeof(motions_t)=72
+    
+	&pt->new_sequence 120
+	sizeof(mpeg2_sequence_t) 60
+	sizeof(mpeg2_gop_t) 8
+	sizeof(mpeg2_picture_t) 36
+	
+	&pt->scan 116
+	*/
+	
     return mpeg2dec;
 }
 
@@ -488,7 +517,7 @@ void mpeg2_close (mpeg2dec_t * mpeg2dec)
     mpeg2_free (mpeg2dec->decoder->quantizer_prescale[3]);
     mpeg2_free (mpeg2dec->decoder->quantizer_prescale[2]);
     mpeg2_free (mpeg2dec->decoder->quantizer_prescale[1]);
-    mpeg2_free (mpeg2dec->decoder->quantizer_prescale[0]);
+//    mpeg2_free (mpeg2dec->decoder->quantizer_prescale[0]);
 //    mpeg2_free (mpeg2dec->decoder->motions);
 //    mpeg2_free (mpeg2dec->decoder);
 //    mpeg2_free (mpeg2dec);

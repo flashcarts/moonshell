@@ -26,6 +26,10 @@
 # include "frame.h"
 # include "synth.h"
 
+# ifdef __cplusplus
+//extern "C" {
+# endif
+
 enum mad_decoder_mode {
   MAD_DECODER_MODE_SYNC  = 0,
   MAD_DECODER_MODE_ASYNC
@@ -88,4 +92,8 @@ int mad_decoder_finish(struct mad_decoder *);
 int mad_decoder_run(struct mad_decoder *, enum mad_decoder_mode);
 int mad_decoder_message(struct mad_decoder *, void *, unsigned int *);
 
+# endif
+
+# ifdef __cplusplus
+//}
 # endif

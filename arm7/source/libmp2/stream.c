@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.
@@ -128,6 +129,7 @@ int mad_stream_sync(struct mad_stream *stream)
  */
 char const *mad_stream_errorstr(struct mad_stream const *stream)
 {
+/*
   switch (stream->error) {
   case MAD_ERROR_NONE:		 return "no error";
 
@@ -156,6 +158,19 @@ char const *mad_stream_errorstr(struct mad_stream const *stream)
   case MAD_ERROR_BADHUFFDATA:	 return "Huffman data overrun";
   case MAD_ERROR_BADSTEREO:	 return "incompatible block_type for JS";
   }
-
+*/
+/*
+  switch (stream->error) {
+    case MAD_ERROR_NONE:
+    case MAD_ERROR_BUFLEN: case MAD_ERROR_BUFPTR:
+    case MAD_ERROR_NOMEM:
+    case MAD_ERROR_LOSTSYNC: case MAD_ERROR_BADLAYER: case MAD_ERROR_BADBITRATE: case MAD_ERROR_BADSAMPLERATE: case MAD_ERROR_BADEMPHASIS:  case MAD_ERROR_BADCRC:
+    case MAD_ERROR_BADBITALLOC: case MAD_ERROR_BADSCALEFACTOR: case MAD_ERROR_BADMODE: case MAD_ERROR_BADFRAMELEN: case MAD_ERROR_BADBIGVALUES: case MAD_ERROR_BADBLOCKTYPE: case MAD_ERROR_BADSCFSI:
+    case MAD_ERROR_BADDATAPTR: case MAD_ERROR_BADPART3LEN:  case MAD_ERROR_BADHUFFTABLE: case MAD_ERROR_BADHUFFDATA: case MAD_ERROR_BADSTEREO:
+    return "error";
+  }
+*/
+  if(stream->error!=MAD_ERROR_NONE) return("error");
+  
   return 0;
 }

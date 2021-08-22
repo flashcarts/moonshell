@@ -1,3 +1,4 @@
+#pragma Ospace
 /*
  * libmad - MPEG audio decoder library
  * Copyright (C) 2000-2004 Underbit Technologies, Inc.
@@ -67,10 +68,10 @@ int (*const decoder_table[3])(struct mad_stream *, struct mad_frame *) = {
  */
 void mad_header_init(struct mad_header *header)
 {
-  header->layer          = 0;
-  header->mode           = 0;
+  header->layer          = (mad_layer)0;
+  header->mode           = (mad_mode)0;
   header->mode_extension = 0;
-  header->emphasis       = 0;
+  header->emphasis       = (mad_emphasis)0;
 
   header->bitrate        = 0;
   header->samplerate     = 0;
@@ -145,7 +146,7 @@ int decode_header(struct mad_header *header, struct mad_stream *stream)
   }
 
   /* layer */
-  header->layer = 4 - mad_bit_read(&stream->ptr, 2);
+  header->layer = (mad_layer)(4 - mad_bit_read(&stream->ptr, 2));
 
   if (header->layer == 4) {
     stream->error = MAD_ERROR_BADLAYER;
@@ -199,7 +200,7 @@ int decode_header(struct mad_header *header, struct mad_stream *stream)
     header->private_bits |= MAD_PRIVATE_HEADER;
 
   /* mode */
-  header->mode = 3 - mad_bit_read(&stream->ptr, 2);
+  header->mode = (mad_mode)(3 - mad_bit_read(&stream->ptr, 2));
 
   /* mode_extension */
   header->mode_extension = mad_bit_read(&stream->ptr, 2);
@@ -213,7 +214,7 @@ int decode_header(struct mad_header *header, struct mad_stream *stream)
     header->flags |= MAD_FLAG_ORIGINAL;
 
   /* emphasis */
-  header->emphasis = mad_bit_read(&stream->ptr, 2);
+  header->emphasis = (mad_emphasis)(mad_bit_read(&stream->ptr, 2));
 
 # if defined(OPT_STRICT)
   /*

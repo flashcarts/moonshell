@@ -24,10 +24,6 @@
 #ifndef MPEG2CONVERT_H
 #define MPEG2CONVERT_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 mpeg2_convert_t mpeg2convert_rgb32;
 mpeg2_convert_t mpeg2convert_rgb24;
 mpeg2_convert_t mpeg2convert_rgb16;
@@ -48,9 +44,5 @@ mpeg2_convert_t * mpeg2convert_rgb (mpeg2convert_rgb_order_t order,
 				    unsigned int bpp);
 
 mpeg2_convert_t mpeg2convert_uyvy;
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif /* MPEG2CONVERT_H */

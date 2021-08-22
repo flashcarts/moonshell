@@ -2,46 +2,21 @@
 #ifndef _console_h
 #define _console_h
 
-#ifdef __cplusplus
+#define ConsoleMaxLen (126)
 
-extern void _consoleInit(u16* font, u16* charBase, u16 numCharacters, u8 charStart, u16* map, u8 pal, u8 bitDepth);
-extern void _consoleInitDefault(u16* map, u16* charBase, u8 bitDepth);
+extern void _consoleInitDefault(u16* map, u16* charBase);
+extern void _consoleClear(void);
+extern void _consolePrintSet(int x, int y);
+extern int _consoleGetPrintSetY(void);
 
-#ifdef ShowDebugMsg
 extern void _consolePrint(const char* s);
 extern void _consolePrintf(const char* format, ...);
-#else
-static inline void _consolePrint(const char* s)
-{
-}
-static inline void _consolePrintf(const char* format, ...)
-{
-}
-#endif
 
-extern void _consolePrintChar(char c);
+extern void _consoleSetLogFile(void *_pf);
+extern bool _consoleGetLogFile(void);
+extern void _consoleSetLogOutFlag(bool f);
 
-extern void _consoleClear(void);
-
-#endif
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-void _consolePrintSet(int x, int y);
-int _consoleGetPrintSetY(void);
-
-#ifdef ShowDebugMsg
-void _consolePrintOne(char *str,u32 v);
-#else
-static inline void _consolePrintOne(char *str,u32 v)
-{
-}
-#endif
-
-#ifdef __cplusplus
-}
-#endif
+extern void _consoleLogPause(void);
+extern void _consoleLogResume(void);
 
 #endif

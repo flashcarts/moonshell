@@ -2,19 +2,13 @@
 #ifndef clibdpg_h
 #define clibdpg_h
 
-#define libdpgTitle "libdpg mpeg-1 and GSM06.10 mux"
+#define libdpgTitle "libdpg Mpeg1 and MP2 or OGG mux"
 
 #include <NDS.h>
-#include "../cstream.h"
+#include "../libs/cstream.h"
 #include "../glib/glib.h"
 
 #include "clibmpg.h"
-#include "plug_gsm.h"
-#include "plug_mp2.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
 
 typedef struct {
   int TotalFrame;
@@ -31,7 +25,7 @@ typedef struct {
   u32 Offset;
 } TGOPList;
 
-enum EDPGAudioFormat {DPGAF_GSM,DPGAF_MP2};
+enum EDPGAudioFormat {DPGAF_MP2};
 
 class Clibdpg
 {
@@ -42,24 +36,19 @@ class Clibdpg
   bool LoadDPGINFO(CStream *pCStream);
   u32 GOPListCount;
   TGOPList *pGOPList;
-  u32 DelayFrames;
 public:
   Clibdpg(CStream *_pCStreamMovie,CStream *_pCStreamAudio);
   ~Clibdpg(void);
   bool Initialized;
   TDPGINFO DPGINFO;
-  bool MovieProcDecode(u64 CurrentSamplesCount);
-  int AudioDecode(s16 *lbuf,s16 *rbuf);
-  void SetFrame(int Frame);
+  bool MovieProcDecode(void);
+  void SliceOneFrame(u16 *pVRAMBuf1,u16 *pVRAMBuf2);
+  void SetFrame(u32 Frame);
   int GetFrameNum(void);
   int GetWidth(void);
   int GetHeight(void);
   EDPGAudioFormat GetDPGAudioFormat(void);
 };
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
 

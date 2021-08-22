@@ -72,6 +72,38 @@ u32 CglStream::Readu32(void)
   return(data);
 }
 
+asm void CglStream_ReadBuffer_fastcopy(const void *psrc,void *pdst,u32 size)
+{
+psrc RN r0
+pdst RN r1
+size RN r2
+
+  PUSH {r4,r5,r6}
+  
+  cmp size,#4*4
+  blo copy8bit
+    
+copy32bitx4
+  ldmia psrc!,{r3,r4,r5,r6}
+  stmia pdst!,{r3,r4,r5,r6}
+  subs size,size,#4*4
+  cmp size,#4*4
+  bhs copy32bitx4
+      
+  cmp size,#0
+  beq copyend
+   
+copy8bit
+  ldrb r3,[psrc],#1
+  subs size,size,#1
+  strb r3,[pdst],#1
+  bne copy8bit
+
+copyend
+  POP {r4,r5,r6}
+  bx lr      
+}
+
 void CglStream::ReadBuffer(void *_dstbuf,const int _readsize)
 {
   if(eof()==true) return;
@@ -84,7 +116,15 @@ void CglStream::ReadBuffer(void *_dstbuf,const int _readsize)
     readsize=size-ofs;
   }
   
-  memmove((u8*)_dstbuf,&buf[ofs],readsize);
+  if(readsize==0) return;
+  
+  const void *_srcbuf=&buf[ofs];
+  
+  if( (((u32)_dstbuf&3)==0) && (((u32)_srcbuf&3)==0) ){
+    CglStream_ReadBuffer_fastcopy(_srcbuf,_dstbuf,readsize);
+    }else{
+    memmove((u8*)_dstbuf,_srcbuf,readsize);
+  }
   
   ofs+=readsize;
 }

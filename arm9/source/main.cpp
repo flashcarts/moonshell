@@ -1,843 +1,329 @@
 
-#include <NDS.h>
-#include <NDS/ARM9/CP15.h>
-
-#include "_console.h"
-#include "_consoleWriteLog.h"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "memtool.h"
-#include "strtool.h"
-
-#include "maindef.h"
-#include "dmalink.h"
-
-#include "glib/glib.h"
-
-#include "../../ipc3.h"
-#include "arm9tcm.h"
-
-#include "filesys.h"
-#include "shell.h"
-#include "cstream_fs.h"
-#include "thumb.h"
-
-#include "gba_nds_fat.h"
-#include "mediatype.h"
-#include "directdisk.h"
-
-#include "cimfs.h"
+#include <nds.h>
 
 #include "_const.h"
-#include "inifile.h"
+#include "maindef.h"
+#include "_console.h"
+#include "_consoleWriteLog.h"
 
 #include "plugin/plug_ndsrom.h"
-#include "plugin/plug_fpk.h"
-#include "plugin/plug_text.h"
-#include "plugin/plug_dpg.h"
-#include "plugin/plug_mp2.h"
-#include "plugin/plug_gmensf.h"
-#include "plugin/plug_gmegbs.h"
 
-#include "VRAMTool.h"
-#include "FontPro.h"
-#include "mwin.h"
-#include "mwin_color.h"
-#include "imgcalc.h"
-
+#include "memtool.h"
 #include "strpcm.h"
-
-#include "Emulator.h"
-
 #include "dll.h"
-
-#include "formdt.h"
-
+#include "dllsound.h"
+#include "lang.h"
 #include "resume.h"
-#include "plugin/plug_text_bookmark.h"
+#include "procstate.h"
+#include "launchstate.h"
+#include "shell.h"
+#include "skin.h"
+#include "extmem.h"
+#include "splash.h"
+#include "BootROM.h"
+#include "ErrorDialog.h"
+#include "component.h"
+#include "extlink.h"
+#include "strtool.h"
 
-#include "main_extforresume.h"
+#include "../../ipc6.h"
 
+#include "arm9tcm.h"
+#include "setarm9_reg_waitcr.h"
+
+#include "fat2.h"
 #include "zlibhelp.h"
 
-#include "linkreset_arm9.h"
-#include "dsCard.h"
-#include "ez5_language.h"
-#include "cardsaver.h"
+#include "sndeff.h"
+#include "datetime.h"
 
-static volatile bool strpcmDoubleSpeedFlag=false;
+#include "fpga_helper.h"
 
-static EExecMode LastExecMode=EM_None;
-EExecMode ExecMode=EM_None;
-
-static bool ShowLog;
-
-u32 NDSLite_Brightness;
-
-TPluginBody *pPluginBody=NULL;
-
-static TPluginBody *pPluginBodyClock;
-static TPlugin_ClockLib_Time CurrentTime;
-static bool PluginBodyClock_RequestRefresh;
-static bool PluginBodyClock_Execute;
-
-static int BacklightOffVsyncCount=0;
-
-//*********aladdin add **************************/
-#ifdef __cplusplus
 extern "C" {
-#endif
-extern void DS_Read(uint32 add,uint8* buf);
-#ifdef __cplusplus
-}
-#endif
-// -----------------------------------------------
-
-extern volatile u32 reqflip; // set from dpg-plugin
-
-volatile u32 reqflip=false;
-
-void InterruptHandler_Vsync_setfb(bool flip,int bl)
-{
-  if(flip==true) pScreenMain->Flip(false);
-  pScreenMain->SetBlendLevel(bl);
+extern u32 dtcmend;
+extern u32 mtcmend;
 }
 
-CODE_IN_ITCM void InterruptHandler_Vsync(void)
-{
-  extern u16 KEYS_Stack;
-  KEYS_Stack|=(~REG_KEYINPUT)&0x3ff;
-  
-  static void (*_InterruptHandler_Vsync_setfb)(bool flip,int bl)=InterruptHandler_Vsync_setfb;
-  
-/*
-  if(IPC3->R2YREQ==R2YREQ_Transfer){
-    DMA1_SRC = (u32)IPC3->R2Y_pFrameBuf;
-    DMA1_DEST = (u32)IPC3->R2Y_pVRAM;
-    DMA1_CR = DMA_ENABLE | DMA_SRC_INC | DMA_DST_INC | DMA_16_BIT | ((256*192*2)>>1);
-    reqflip=true;
-    IPC3->R2YREQ=R2YREQ_NULL;
-  }
-*/
-  
-  if(reqflip!=0){
-    if(reqflip==3){
-      _InterruptHandler_Vsync_setfb(true,6);
-      }else{
-      if(reqflip==2){
-        _InterruptHandler_Vsync_setfb(false,11);
-        }else{
-        _InterruptHandler_Vsync_setfb(false,16);
-      }
-    }
-    reqflip--;
-  }
-}
+u32 *pDTCMEND,*pMTCMEND;
 
-bool strpcmUpdate_mainloop(void)
-{ cwl();
-#ifdef notuseSound
-  return(false);
-#endif
+CglFont *pCglFontDefault=NULL;
 
-  if(ExecMode==EM_DPG) return(false);
-  
-  u32 BaseSamples=IPC3->strpcmSamples;
-  u32 Samples=0;
-  
-  REG_IME=0;
-  
-  u32 CurIndex=(strpcmRingBufWriteIndex+1) & strpcmRingBufBitMask;
-  u32 PlayIndex=strpcmRingBufReadIndex;
-  bool EmptyFlag;
-  
-  EmptyFlag=strpcmRingEmptyFlag;
-  strpcmRingEmptyFlag=false;
-  
-  REG_IME=1;
-  
-  if(CurIndex==PlayIndex) return(false);
-  
-  if(EmptyFlag==true){ cwl();
-    _consolePrintf("strpcm:CPU overflow.\n");
-  }
-  
-  if((strpcmRingLBuf==NULL)||(strpcmRingRBuf==NULL)) return(false);
-  
-  s16 *ldst=&strpcmRingLBuf[BaseSamples*CurIndex];
-  s16 *rdst=&strpcmRingRBuf[BaseSamples*CurIndex];
-  
-  if(strpcmRequestStop==true){ cwl();
-    Samples=0;
-    }else{ cwl();
-    
-    switch(ExecMode){ cwl();
-      case EM_MSPSound: case EM_MP3Boot: { cwl();
-        if(strpcmDoubleSpeedFlag==true){ cwl();
-          pPluginBody->pSL->Update(NULL,NULL);
-        }
-        Samples=pPluginBody->pSL->Update(ldst,rdst);
-      } break;
-      case EM_GMENSF: {
-        if(strpcmDoubleSpeedFlag==true){ cwl();
-          UpdateGMENSF(NULL,NULL);
-        }
-        Samples=UpdateGMENSF(ldst,rdst);
-      } break;
-      case EM_GMEGBS: {
-        if(strpcmDoubleSpeedFlag==true){ cwl();
-          UpdateGMEGBS(NULL,NULL);
-        }
-        Samples=UpdateGMEGBS(ldst,rdst);
-      } break;
-/*
-      case EM_GMEVGM: {
-        if(strpcmDoubleSpeedFlag==true){ cwl();
-          UpdateGMEVGM(NULL,NULL);
-        }
-        Samples=UpdateGMEVGM(ldst,rdst);
-      } break;
-      case EM_GMEGYM: {
-        if(strpcmDoubleSpeedFlag==true){ cwl();
-          UpdateGMEGYM(NULL,NULL);
-        }
-        Samples=UpdateGMEGYM(ldst,rdst);
-      } break;
-*/
-      case EM_DPG: { cwl();
-        Samples=UpdateDPG_Audio(&ldst[0],&rdst[0]);
-      } break;
-      default: {
-        Samples=0;
-      } break;
-    }
-    if(Samples!=BaseSamples) strpcmRequestStop=true;
-  }
-  
-  if(Samples<BaseSamples){ cwl();
-    for(u32 idx=Samples;idx<BaseSamples;idx++){ cwl();
-      ldst[idx]=0;
-      rdst[idx]=0;
-    }
-  }
-  
-  REG_IME=0;
-  strpcmRingBufWriteIndex=CurIndex;
-  REG_IME=1;
-  
-  if(Samples==0) return(false);
-  
-  return(true);
-}
+bool isExistsROMEO2;
+
+ENextProc NextProc;
+
+UnicodeChar RelationalFilePathUnicode[MaxFilenameLength];
+UnicodeChar RelationalFileNameUnicode[MaxFilenameLength];
+u32 RelationalFilePos;
+
+ETextEncode ManualTextEncode;
+bool ManualTextEncode_OverrideFlag;
 
 // ------------------------------------------------------------------
-
-bool isExecMode_DPG(void)
-{
-  if(ExecMode==EM_DPG){
-    return(true);
-    }else{
-    return(false);
-  }
-}
-
-#include "main_pluginfo.h"
-
-#include "main_pic.h"
-
-#include "main_fs.h"
-
-// ------------------------------------------------------------------
-
-static bool MP3Boot_PlayFileFromShell(char *mp3fn)
-{ cwl();
-  u32 DeflateSize=0;
-  u8 *DeflateBuf=NULL;
-  
-  Shell_ReadFile(mp3fn,(void**)&DeflateBuf,(int*)&DeflateSize);
-  if((DeflateBuf==NULL)||(DeflateSize==0)){
-    _consolePrintf("shell/%s file not found.\n",mp3fn);
-    return(false);
-  }
-  
-  FileHandle=FileSys_fopen_DirectMapping(VT_IMFS,true,DeflateBuf,DeflateSize,0,0);
-  
-  if(FileHandle==0){ cwl();
-    _consolePrintf("fopen_DirectMapping error.\n");
-    return(false);
-  }
-  
-  {
-    {
-      char fn[PluginFilenameMax];
-      if(DLLList_GetPluginFilename(".mp3",fn)!=EPT_Sound){
-        _consolePrintf("not found mp3 plugin.\n");
-        return(false);
-      }
-      pPluginBody=DLLList_LoadPlugin(fn);
-    }
-    if(pPluginBody->pSL->Start(FileHandle)==false){ cwl();
-      _consolePrintf("mp3 plugin start error.\n");
-      return(false);
-    }
-    ExecMode=EM_MP3Boot;
-    strpcmStart(false,pPluginBody->pSL->GetSampleRate(),pPluginBody->pSL->GetSamplePerFrame(),pPluginBody->pSL->GetChannelCount(),SPF_PCMx4);
-  }
-  
-  while(strpcmUpdate_mainloop()==true){ cwl();
-  }
-  
-  return(true);
-}
-
-// ------------------------------------------------------------------
-
-bool RefreshBacklightOffCount(void)
-{
-  TiniBacklightTimeout *BacklightTimeout=&GlobalINI.BacklightTimeout;
-  int vsec=0;
-  bool eclk=false;
-  
-  switch(ExecMode){
-    case EM_DPG: {
-      vsec=0;
-      eclk=false;
-    } break;
-    case EM_None: case EM_MP3Boot: case EM_NDSROM: case EM_FPK: {
-      vsec=BacklightTimeout->WhenStandby;
-      eclk=true;
-    } break;
-    case EM_MSPImage: {
-      vsec=BacklightTimeout->WhenPicture;
-      eclk=false;
-    } break;
-    case EM_Text: {
-      vsec=BacklightTimeout->WhenText;
-      eclk=true;
-    } break;
-    case EM_MSPSound: case EM_GMENSF: case EM_GMEGBS: { // case EM_GMEVGM: case EM_GMEGYM: {
-      vsec=BacklightTimeout->WhenSound;
-      eclk=true;
-    } break;
-/*
-    default: {
-      vsec=0;
-    }
-*/
-  }
-  
-  bool res=false;
-  if(vsec!=0){
-    if(BacklightOffVsyncCount==0){
-      if(PluginBodyClock_Execute==true) MWin_TransWindow(WM_FileSelect);
-      if(ExecMode==EM_Text){
-        switch(GlobalINI.TextPlugin.SelectDisplay){
-          case EITPSD_Bottom: IPC3->LCDPowerControl=LCDPC_ON_BOTTOM; break;
-          case EITPSD_Top: IPC3->LCDPowerControl=LCDPC_ON_TOP_LEDON; break;
-          default: break;
-        }
-        }else{
-        IPC3->LCDPowerControl=LCDPC_ON_BOTH;
-      }
-      if(GlobalINI.System.FileSelectSubScreen==true){
-        PluginBodyClock_Execute=false;
-        }else{
-        if(pPluginBodyClock==NULL){
-          PluginBodyClock_Execute=false;
-          }else{
-          PluginBodyClock_Execute=eclk;
-        }
-      }
-      res=true;
-    }
-  }
-  
-  if(vsec==0){
-    BacklightOffVsyncCount=0;
-    }else{
-    BacklightOffVsyncCount=vsec*60;
-  }
-  return(res);
-}
-
-void ProcBacklightOffCount(u32 VsyncCount)
-{
-  if(BacklightOffVsyncCount==0) return;
-  
-  bool eclk=false;
-  
-  switch(ExecMode){
-    case EM_DPG: {
-      eclk=false;
-    } break;
-    case EM_None: case EM_MP3Boot: case EM_NDSROM: case EM_FPK: {
-      eclk=true;
-    } break;
-    case EM_MSPImage: {
-      eclk=false;
-    } break;
-    case EM_Text: {
-      eclk=true;
-    } break;
-    case EM_MSPSound: case EM_GMENSF: case EM_GMEGBS: { // case EM_GMEVGM: case EM_GMEGYM: {
-      eclk=true;
-    } break;
-/*
-    default: {
-      vsec=0;
-    }
-*/
-  }
-  
-  if(BacklightOffVsyncCount<=(s32)VsyncCount){
-    BacklightOffVsyncCount=0;
-    }else{
-    BacklightOffVsyncCount-=(s32)VsyncCount;
-  }
-  
-  if(BacklightOffVsyncCount==0){
-    if((eclk==false)||(pPluginBodyClock==NULL)){
-      IPC3->LCDPowerControl=LCDPC_OFF_BOTH;
-      PluginBodyClock_Execute=false;
-      }else{
-      IPC3->LCDPowerControl=LCDPC_ON_TOP_LEDBLINK;
-      PluginBodyClock_Execute=true;
-      PluginBodyClock_RequestRefresh=true;
-    }
-  }
-}
-
-void videoSetModeSub_SetShowLog(bool e)
-{
-  ShowLog=e;
-  
-  bool ebg=false;
-  
-  if(e==false){
-    if(GlobalINI.System.FileSelectSubScreen==true) ebg=true;
-    if(pPluginBodyClock!=NULL) ebg=true;
-  }
-  
-  if(ebg==false){
-    videoSetModeSub(MODE_2_2D | DISPLAY_BG2_ACTIVE);
-    }else{
-    videoSetModeSub(MODE_2_2D | DISPLAY_SPR_ACTIVE | DISPLAY_SPR_2D | DISPLAY_SPR_2D_BMP_256);
-  }
-}
 
 void ShowLogHalt(void)
-{ cwl();
-  REG_IME=0;
-  
-  videoSetModeSub_SetShowLog(true);
-  IPC3->LCDPowerControl=LCDPC_ON_BOTH;
-  _consolePrintf("\n");
-  while(1){ cwl();
-    swiWaitForVBlank();
-  }
-}
-
-extern u32 __dtcm_lma;
-extern u32 __dtcm_start;
-extern u32 __dtcm_end;
-
-extern u32 __itcm_lma;
-extern u32 __itcm_start;
-extern u32 __itcm_end;
-
-#define	REG_WRAMCNT	(*(vu8*) 0x4000247)
-
-static void ResetMemory(void)
 {
-  // 0x04000247 - REG_WRAMCNT - (Shared) WRAM Control Register (R/W)
-  // 3=Bank0 and Bank1 to ARM7
-  REG_WRAMCNT=3;
+  _consoleLogResume();
+  IPC6->LCDPowerControl=LCDPC_ON_BOTH;
+  videoSetModeSub(MODE_2_2D | DISPLAY_BG2_ACTIVE);
   
-/*
-  // FlashMeV6 NDS-V3
-  CP15_SetID          (0x41059461);
-  CP15_SetCacheType   (0x0f0d2112);
-  CP15_SetTCMSize     (0x00140180);
-  CP15_SetControl     (0x0005307d);
-  CP15_SetDataCachable(0x00000042);
-  CP15_SetInstructionCachable(0x00000042);
-  CP15_SetDataBufferable(0x00000006);
-  CP15_SetDataPermissions(0x36333333);
-  CP15_SetInstructionPermissions(0x36636333);
-  CP15_SetRegion0(0x04000033);
-  CP15_SetRegion1(0x0200002b);
-  CP15_SetRegion2(0x037f801d);
-  CP15_SetRegion3(0x08000035);
-  CP15_SetRegion4(0x0080001b);
-  CP15_SetRegion5(0x0000001d);
-  CP15_SetRegion6(0xffff001d);
-  CP15_SetRegion7(0x0240002b);
-  CP15_SetDCacheLockdown(0x00000000);
-  CP15_SetICacheLockdown(0x00000000);
-  CP15_SetDTCM(0x0080000a);
-  CP15_SetITCM(0x0000000c);
-  CPSR=6000001f
+  _consoleSetLogOutFlag(true);
   
-  // NoFlashMe NDS-V2
-  CP15_SetID          (0x41059461);
-  CP15_SetCacheType   (0x0f0d2112);
-  CP15_SetTCMSize     (0x00140180);
-  CP15_SetControl     (0x0005307d);
-  CP15_SetDataCachable(0x00000042);
-  CP15_SetInstructionCachable(0x00000042);
-  CP15_SetDataBufferable(0x00000006);
-  CP15_SetDataPermissions(0x36333333);
-  CP15_SetInstructionPermissions(0x36636333);
-  CP15_SetRegion0(0x04000033);
-  CP15_SetRegion1(0x0200002b);
-  CP15_SetRegion2(0x037f801d);
-  CP15_SetRegion3(0x08000035);
-  CP15_SetRegion4(0x0080001b);
-  CP15_SetRegion5(0x0000001d);
-  CP15_SetRegion6(0xffff001d);
-  CP15_SetRegion7(0x0240002b);
-  CP15_SetDCacheLockdown(0x00000000);
-  CP15_SetICacheLockdown(0x00000000);
-  CP15_SetDTCM(0x0080000a);
-  CP15_SetITCM(0x00000020);
+  _consolePrint("\n     Application halted!!\n");
   
-  // FlashMe M3SD-J15b
-  CP15_SetID          (0x41059461);
-  CP15_SetCacheType   (0x0f0d2112);
-  CP15_SetTCMSize     (0x00140180);
-  CP15_SetControl     (0x0005307d);
-  CP15_SetDataCachable(0x00000042);
-  CP15_SetInstructionCachable(0x00000042);
-  CP15_SetDataBufferable(0x00000006);
-  CP15_SetDataPermissions(0x36333333);
-  CP15_SetInstructionPermissions(0x36636333);
-  CP15_SetRegion0(0x04000033);
-  CP15_SetRegion1(0x0200002b);
-  CP15_SetRegion2(0x037f801d);
-  CP15_SetRegion3(0x08000035);
-  CP15_SetRegion4(0x0080001b);
-  CP15_SetRegion5(0x0000001d);
-  CP15_SetRegion6(0xffff001d);
-  CP15_SetRegion7(0x0240002b);
-  CP15_SetDCacheLockdown(0x00000000);
-  CP15_SetICacheLockdown(0x00000000);
-  CP15_SetDTCM(0x0080000a);
-  CP15_SetITCM(0x0000000c);
-  CPSR=6000001f
-*/
-  
-  CP15_SetITCM(0x0000000c);
-  {
-    u32 itcmsize=(u32)&__itcm_end-(u32)&__itcm_start;
-    
-    volatile u32 *srcptr=(vu32*)((u32)&__itcm_lma);
-    volatile u32 *dstptr=(vu32*)(0x00000000);
-    
-    for(u32 i=0;i<itcmsize;i+=4){
-      *dstptr++=*srcptr++;
-    }
+  if(_consoleGetLogFile()==true){
+    _consolePrint("Please refer [/moonshl2/logbuf.txt]\n\n");
+    }else{
+    _consolePrint("\n");
   }
-  
-  {
-    u32 dtcmsize=(u32)&__dtcm_end-(u32)&__dtcm_start;
-    
-    volatile u32 *srcptr=(vu32*)((u32)&__dtcm_lma);
-    volatile u32 *dstptr=(vu32*)(0x00800000);
-    
-    for(u32 i=0;i<dtcmsize;i+=4){
-      *dstptr++=*srcptr++;
-    }
-  }
-}
-
-bool chkITCM(int line)
-{return(true);
-  u32 itcmsize=(u32)&__itcm_end-(u32)&__itcm_start;
-  
-  volatile u32 *srcptr=(vu32*)((u32)&__itcm_lma);
-  volatile u32 *dstptr=(vu32*)(0x00000000);
-  
-  for(u32 i=0;i<itcmsize/4;i++){
-    if(*srcptr!=*dstptr){
-      _consolePrintf("%d:ITCM image error at 0x%x(%x)->0x%x(%x)\n",line,(u32)srcptr,*srcptr,(u32)dstptr,*dstptr);
-      ShowLogHalt();
-      return(false);
-    }
-    dstptr++; srcptr++;
-  }
-  
-  return(true);
-}
-
-bool chkDTCM(int line)
-{
-  u32 dtcmsize=(u32)&__dtcm_end-(u32)&__dtcm_start;
-  
-  volatile u32 *srcptr=(vu32*)((u32)&__dtcm_lma);
-  volatile u32 *dstptr=(vu32*)(0x00800000);
-  
-  for(u32 i=0;i<dtcmsize/4;i++){
-    if(*srcptr!=*dstptr){
-      _consolePrintf("%d:DTCM image error at 0x%x->0x%x\n",line,(u32)srcptr,(u32)dstptr);
-      ShowLogHalt();
-      return(false);
-    }
-    dstptr++; srcptr++;
-  }
-  
-  return(true);
-}
-
-extern "C" {
-  void CheckTCM(int line);
-}
-
-void CheckTCM(int line)
-{
-  if(false){
-    int sp;
-    asm("mov %0, sp":"=r"(sp));
-    _consolePrintf("sp%8x\n",sp);
-  }
-  
-  chkITCM(line);
-//  chkDTCM(line);
-}
-
-static void _test_ShowCP15(void)
-{
-  _consolePrintf("%8x\n",CP15_GetID());
-  _consolePrintf("%8x\n",CP15_GetCacheType());
-  _consolePrintf("%8x\n",CP15_GetTCMSize());
-  _consolePrintf("%8x\n",CP15_GetControl());
-  _consolePrintf("%8x\n",CP15_GetDataCachable());
-  _consolePrintf("%8x\n",CP15_GetInstructionCachable());
-  _consolePrintf("%8x\n",CP15_GetDataBufferable());
-  _consolePrintf("%8x\n",CP15_GetDataPermissions());
-  _consolePrintf("%8x\n",CP15_GetInstructionPermissions());
-  _consolePrintf("%8x\n",CP15_GetRegion0());
-  _consolePrintf("%8x\n",CP15_GetRegion1());
-  _consolePrintf("%8x\n",CP15_GetRegion2());
-  _consolePrintf("%8x\n",CP15_GetRegion3());
-  _consolePrintf("%8x\n",CP15_GetRegion4());
-  _consolePrintf("%8x\n",CP15_GetRegion5());
-  _consolePrintf("%8x\n",CP15_GetRegion6());
-  _consolePrintf("%8x\n",CP15_GetRegion7());
-  _consolePrintf("%8x\n",CP15_GetDCacheLockdown());
-  _consolePrintf("%8x\n",CP15_GetICacheLockdown());
-  _consolePrintf("%8x\n",CP15_GetDTCM());
-  _consolePrintf("%8x\n",CP15_GetITCM());
-  
-  int a;
-  
-  asm("mrs %0, cpsr":"=r"(a));
-  
-  _consolePrintf("cpsr=%8x\n",a);
-  
   while(1);
 }
 
-void NDSLite_SetBrightness(u32 bright)
+static __attribute__ ((always_inline)) void _ttywrch_tx_waitsend(const u32 data)
 {
-  if(IPC3->isNDSLite==false) return;
-  
-  IPC3->Brightness=bright;
+	while((*((vu8 *)0x0A000001) & 2)!=0);
+	*((vu8 *)0x0A000000)=(u8)data;
+}
+
+extern "C" {
+extern void _ttywrch(int ch);
+}
+
+void _ttywrch(int ch)
+{
+  _ttywrch_tx_waitsend(0xa0);
+  _ttywrch_tx_waitsend(2);
+  _ttywrch_tx_waitsend((u32)ch);
 }
 
 // ------------------------------------------------------
 
-#include "setarm9_reg_waitcr.h"
-#include "gba_nds_fat.h"
+#include "chrglyph_999.h"
 
-u8 OpenSaveTypeFile()
+static void LoadDefaultFont(void)
 {
-	FAT_FILE *fh=NULL;
-	int size;
-	fh = FAT_fopen("/shell/ezsave.lst","r");
-	if(fh==NULL)
-	{
-		//_consolePrintf('here\n");
-		return 0;
-	}
-	FAT_fseek(fh,0,SEEK_END);
-	gl_SizeTypeFileSize=FAT_ftell(fh);
-	FAT_fseek(fh,0,SEEK_SET);
-	gl_pSaveTypeBuf=(u8*)safemalloc(gl_SizeTypeFileSize);
-	if(gl_pSaveTypeBuf==NULL)
-	{
-		FAT_fclose(fh);
-		return 0;
-	}
-	FAT_fread(gl_pSaveTypeBuf,gl_SizeTypeFileSize,1,fh);
-	FAT_fclose(fh);
-	return 1;
+  if(pCglFontDefault!=NULL){
+    delete pCglFontDefault; pCglFontDefault=NULL;
+  }
+  pCglFontDefault=new CglFont(chrglyph_999,chrglyph_999_Size);
+  
+  pScreenMain->pBackCanvas->SetCglFont(pCglFontDefault);
+  pScreenMain->pViewCanvas->SetCglFont(pCglFontDefault);
+  pScreenMainOverlay->pCanvas->SetCglFont(pCglFontDefault);
+  pScreenSub->pCanvas->SetCglFont(pCglFontDefault);
 }
 
-u8 WriteSaveTypeFile()
+static void LangInitAndLoadFont(void)
 {
-	FAT_FILE *fh=NULL;
-	int size;
-	fh = FAT_fopen("/shell/ezsave.lst","w");
-	if(fh==NULL)
-		return 0;
-	FAT_fwrite(gl_pSaveTypeBuf,gl_SizeTypeFileSize,1,fh);
-	FAT_fclose(fh);
-	return 1;
+  Shell_FAT_fopen_LanguageInit();
+  
+  FAT_FILE *pf=Shell_FAT_fopen_Language_chrglyph();
+  if(pf==NULL){
+    _consolePrintf("Fatal error: Can not found font file.\n");
+    ShowLogHalt();
+  }
+
+  u32 bufsize=FAT2_GetFileSize(pf);
+  void *pdummy=(u8*)safemalloc((bufsize*2)+(192*1024));
+  u8 *pbuf=(u8*)safemalloc(bufsize);
+  
+  FAT2_fread_fast(pbuf,1,bufsize,pf);
+  FAT2_fclose(pf);
+  
+  safefree(pdummy); pdummy=NULL;
+  
+  if(pCglFontDefault!=NULL){
+    delete pCglFontDefault; pCglFontDefault=NULL;
+  }
+  pCglFontDefault=new CglFont((const u8*)pbuf,bufsize);
+  
+  safefree(pbuf); pbuf=NULL;
+  
+  pScreenMain->pBackCanvas->SetCglFont(pCglFontDefault);
+  pScreenMain->pViewCanvas->SetCglFont(pCglFontDefault);
+  pScreenMainOverlay->pCanvas->SetCglFont(pCglFontDefault);
+  pScreenSub->pCanvas->SetCglFont(pCglFontDefault);
+  
+  _consolePrintf("Loaded font for your language.\n");
 }
 
-static void FATTest(void)
+static void DrawBootWarn(const void *pSrcBuf,u32 SrcSize,u32 palmode)
 {
+  TZLIBData zd;
+  
+  zd.DstSize=ScreenWidth*ScreenHeight;
+  zd.pDstBuf=(u8*)safemalloc(zd.DstSize);
+  zd.SrcSize=SrcSize;
+  zd.pSrcBuf=(u8*)pSrcBuf;
+  
+  if((zd.pSrcBuf[0]!=0x78)||(zd.pSrcBuf[1]!=0x01)){
+    _consolePrintf("Fatal error: Unknown compress format.\n");
+    ShowLogHalt();
+  }
+
+  if(zlibdecompress(&zd)==false){
+    _consolePrintf("Fatal error: ZLIB decompress error.\n");
+    ShowLogHalt();
+  }
+  
+  u16 pals[4];
+  
+  if(palmode==0){
+    pals[0]=RGB15(12,0,0)|BIT15;
+    pals[1]=RGB15(7,0,0)|BIT15;
+    pals[2]=RGB15(31,31,31)|BIT15;
+    pals[3]=RGB15(0,0,0)|BIT15;
+    }else{
+    pals[0]=RGB15(24,0,0)|BIT15;
+    pals[1]=RGB15(28,26,27)|BIT15;
+    pals[2]=RGB15(0,0,0)|BIT15;
+    pals[3]=0;
+  }    
+  
+  u16 *psrc=(u16*)zd.pDstBuf;
+  u32 *pdst=(u32*)pScreenMain->pViewCanvas->GetVRAMBuf();
+  for(u32 idx=0;idx<(ScreenWidth*ScreenHeight)/2;idx++){
+    u32 pal16=*psrc++;
+    u32 col32=pals[pal16&0xff]|(pals[pal16>>8]<<16);
+    *pdst++=col32;
+  }
+  
+  zd.DstSize=0;
+  safefree(zd.pDstBuf); zd.pDstBuf=NULL;
+}
+
+// ----------------------------------------
+
+extern u32 _pGUID;
+
+static void CheckGUID_Pre(void)
+{
+  u32 *pGUID=&_pGUID;
+  
+  if(pGUID[2]==pGUID[5]) return;
+  
+  _consolePrintf("pGUID=0x%x\n",(u32)pGUID);
+  
+  _consolePrintf("ID=0x%x\n",pGUID[0]);
+  _consolePrintf("XID=0x%x\n",pGUID[1]);
+  _consolePrintf("xcrc=0x%x\n",pGUID[2]);
+  _consolePrintf("MemStartAddr=0x%x\n",pGUID[3]);
+  _consolePrintf("MemEndAddr=0x%x\n",pGUID[4]);
+  _consolePrintf("chkxcrc=0x%x\n",pGUID[5]);
+  
+  _consolePrint("\n");
+  _consolePrint("  --- Detected fatal error !! ---\n");
+  _consolePrint("\n");
+  _consolePrint("  There is a loss in the main body of \n");
+  _consolePrint("  The ARM9 code.\n");
+  _consolePrint("  Please copy moonshl2.nds with \n");
+  _consolePrint("  Windows again.\n");
+  _consolePrint("  The cause might be a loose connection \n");
+  _consolePrint("  of the equipment.\n");
+  _consolePrint("\n");
+}
+
+static bool CheckGUID_Pre_for_CheckTCM(void)
+{
+  u32 *pGUID=&_pGUID;
+  
+  if(pGUID[2]==pGUID[5]) return(false);
+  
+  _consolePrintf("pGUID=0x%x\n",(u32)pGUID);
+  
+  _consolePrintf("ID=0x%x\n",pGUID[0]);
+  _consolePrintf("XID=0x%x\n",pGUID[1]);
+  _consolePrintf("xcrc=0x%x\n",pGUID[2]);
+  _consolePrintf("MemStartAddr=0x%x\n",pGUID[3]);
+  _consolePrintf("MemEndAddr=0x%x\n",pGUID[4]);
+  _consolePrintf("chkxcrc=0x%x\n",pGUID[5]);
+  
+  _consolePrint("\n");
+  _consolePrint("  --- Detected fatal error !! ---\n");
+  _consolePrint("\n");
+  _consolePrint("  There is a loss in the main body of \n");
+  _consolePrint("  The ARM9 code.\n");
+  _consolePrint("  Please copy moonshl2.nds with \n");
+  _consolePrint("  Windows again.\n");
+  _consolePrint("  The cause might be a loose connection \n");
+  _consolePrint("  of the equipment.\n");
+  _consolePrint("\n");
+  
+  return(true);
+}
+
+#include "guidxcrcerror_b8zlib.h"
+
+static void CheckGUID_Body(void)
+{
+  u32 *pGUID=&_pGUID;
+  
+  if(pGUID[2]==pGUID[5]) return;
+  
+  DrawBootWarn(guidxcrcerror_b8zlib,guidxcrcerror_b8zlib_Size,0);
+  
+  ShowLogHalt();
+}
+
+// ----------------------------------------
+
+static __attribute__ ((noinline)) void mainloop(void);
+
+#include "main_vardebug.h"
+
+#include "bootwarn_b8zlib.h"
+
+static bool chkflag;
+
+static __attribute__ ((noinline)) void main_ins_start(void)
+{
+  u32 zero;
+  asm {
+    mov zero,#0
+    MCR p15, 0, zero, c7, c10, 4 // drain write buffer
+  }
+  
+  static u32 stackptr=__current_sp();
+  static vu32 stackdata[32];
+  
+  {
+    u32 *pptr=(u32*)stackptr;
+    for(u32 idx=0;idx<32;idx++){
+      stackdata[idx]=pptr[-16+idx];
+    }
+  }
+  
   SetARM9_REG_WaitCR();
-  FAT_InitFiles();
   
-  FAT_CWD("/");
+  REG_POWERCNT = POWER_ALL_2D; // | POWER_SWAP_LCDS; // SWAP偡傞偲僼傽僀儖儕僗僩偑壓
   
-  char fn[MAX_FILENAME_LENGTH];
-  u32 FAT_FileType;
+  atype_init();
   
-  FAT_FileType=FAT_FindFirstFile(fn);
-  
-  while(FAT_FileType!=0){ cwl();
-    if((strcmp(fn,".")!=0)&&(strcmp(fn,"..")!=0)){ cwl();
-      _consolePrintf("fn(%d)=%s\n",FAT_FileType,fn);
-      
-      UnicodeChar lfn[256];
-      
-      if(FAT_GetLongFilenameUnicode(lfn,IMFS_FilenameLengthMax-4)==false){ cwl();
-        StrConvert_Local2Unicode(fn,lfn);
-      }
-      
-    }
-    
-    FAT_FileType=FAT_FindNextFile(fn);
-  }
+  pDTCMEND=(u32*)&dtcmend;
+  pDTCMEND+=128/4;
   
   {
-    u16 KEYS_CUR;
-    
-    KEYS_CUR=0;
-    while(KEYS_CUR==0){ cwl();
-      KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
+    // setup stack overflow checker
+    u32 *p=pDTCMEND;
+    for(;p<(u32*)__current_sp();p++){
+      *p=(u32)p;
     }
   }
   
-  FAT_FreeFiles();
-}
-
-// ------------------------------------------------------
-
-u32 SetARM9_REG_ROM1stAccessCycleControl,SetARM9_REG_ROM2stAccessCycleControl;
-
-void main_ShowWarn(void)
-{
-  u32 UserLanguage=(u32)-1;
-  u32 Timeout=0x10000;
-  
-  while(UserLanguage==(u32)-1){
-    UserLanguage=IPC3->UserLanguage;
-    Timeout--;
-    if(Timeout==0){
-      _consolePrintf("NDS farmware language read error. ARM7CPU stopped...?\n");
-      while(1);
-    }
-  }
-  
-  _consolePrintf("NDS farmware language ID : %d\n",UserLanguage);
-  
-  s32 PathIndex=pIMFS->GetPathIndex("/shell");
-  if(PathIndex==-1){
-    _consolePrintf("can not found IMFS /shell.\n");
-    while(1);
-  }
-  
-  char *pfn;
-  
-  switch(UserLanguage){
-    case 1: pfn="warn_eng.b15"; break;
-    case 2: pfn="warn_fre.b15"; break;
-    case 4: pfn="warn_ita.b15"; break;
-    case 3: pfn="warn_deu.b15"; break;
-    case 5: pfn="warn_esp.b15"; break;
-    case 0: pfn="warn_jpn.b15"; break;
-    default: pfn="warn_eng.b15"; break;
-  }
-  
-  _consolePrintf("warn image filename [%s]\n",pfn);
-  
-  s32 FileIndex=pIMFS->GetIndexFromFilename(PathIndex,pfn);
-  
-  if(FileIndex==-1){
-    pfn="warn_eng.b15";
-    _consolePrintf("change to [%s]\n",pfn);
-    FileIndex=pIMFS->GetIndexFromFilename(PathIndex,pfn);
-  }
-  
-  u32 FileSize;
-  u8 *FileBuf;
-  
-  FileSize=pIMFS->GetFileDataSizeFromIndex(PathIndex,FileIndex);
-  FileBuf=(u8*)safemalloc(FileSize);
-  pIMFS->GetFileDataFromIndex(PathIndex,FileIndex,FileBuf);
-  
-  if((FileSize==0)||(FileBuf==NULL)){
-    _consolePrintf("can not found image.\n");
-    while(1);
-  }
-  
-  {
-    CglB15 glB15(FileBuf,FileSize);
-//    glB15.BitBlt(pScreenMainOverlay->pCanvas,0,0,glB15.GetWidth(),glB15.GetHeight(),0,0);
-    MemCopy16DMA3(glB15.pCanvas->GetScanLine(0),pScreenMainOverlay->pCanvas->GetScanLine(0),ScreenHeight*ScreenWidth*2);
-  }
-  
-  safefree(FileBuf); FileBuf=NULL;
-}
-
-#ifdef ShowDebugMsg
-#else
-static void _consolePrint_dummy(const char* s)
-{
-}
-#endif
-
-int main(void)
-{
-  ResetMemory();
-  
-  REG_IME=0;
-  
-  POWER_CR = POWER_ALL_2D;
-  
-  videoSetModeSub_SetShowLog(false);
-  
-#ifdef ShowDebugMsg
   glSetFuncDebugPrint(_consolePrint);
-#else
-  glSetFuncDebugPrint(_consolePrint_dummy);
-#endif
   glDefaultMemorySetting();
   
-/*
   {
-    SUB_BG2_CR = BG_32x32 | BG_MAP_BASE(8) | BG_TILE_BASE(0) | BG_PRIORITY_0;
-    BG_PALETTE_SUB[255] = RGB15(31,31,31);//by default font will be rendered with color 255
-    
-    //consoleInit() is a lot more flexible but this gets you up and running quick
-    _consoleInitDefault((u16*)SCREEN_BASE_BLOCK_SUB(8), (u16*)CHAR_BASE_BLOCK_SUB(0), 16);
-    _consoleClear();
-    _consolePrintSet(0,0);
-  }
-*/
-  {
-    SUB_BG2_CR = BG_256_COLOR | BG_RS_64x64 | BG_MAP_BASE(8) | BG_TILE_BASE(0) | BG_PRIORITY_0; // Tile16kb Map2kb(64x32)
+    SUB_BG2_CR = BG_256_COLOR | BG_RS_64x64 | BG_MAP_BASE(8) | BG_TILE_BASE(0) | BG_PRIORITY_1; // Tile16kb Map2kb(64x32)
     
     BG_PALETTE_SUB[(0*16)+0] = RGB15(0,0,0); // unuse (transparent)
-    BG_PALETTE_SUB[(0*16)+1] = RGB15(0,0,8) | BIT(15); // BG color
+    BG_PALETTE_SUB[(0*16)+1] = RGB15(0,0,2) | BIT(15); // BG color
     BG_PALETTE_SUB[(0*16)+2] = RGB15(0,0,0) | BIT(15); // Shadow color
-    BG_PALETTE_SUB[(0*16)+3] = RGB15(31,31,31) | BIT(15); // Text color
+    BG_PALETTE_SUB[(0*16)+3] = RGB15(16,16,16) | BIT(15); // Text color
     
     u16 XDX=(u16)((8.0/6)*0x100);
     u16 YDY=(u16)((8.0/6)*0x100);
@@ -847,1061 +333,950 @@ int main(void)
     SUB_BG2_YDX = 0;
     SUB_BG2_YDY = YDY;
     
-    SUB_BG2_CX=-1;
+    SUB_BG2_CX=1;
     SUB_BG2_CY=-1;
     
     //consoleInit() is a lot more flexible but this gets you up and running quick
-    _consoleInitDefault((u16*)SCREEN_BASE_BLOCK_SUB(8), (u16*)CHAR_BASE_BLOCK_SUB(0), 256);
-    _consoleClear();
-    _consolePrintSet(0,0);
+    _consoleInitDefault((u16*)(SCREEN_BASE_BLOCK_SUB(8)), (u16*)(CHAR_BASE_BLOCK_SUB(0)));
   }
+  
+  _consolePrintf("boot %s %s\n%s\n%s\n\n",ROMTITLE,ROMVERSION,ROMDATE,ROMENV);
+  _consolePrintf("__current pc=0x%08x sp=0x%08x\n\n",__current_pc(),__current_sp());
+  CheckGUID_Pre();
+  PrintFreeMem();
   
   glDefaultClassCreate();
+  LoadDefaultFont();
   
-#ifdef EmulatorDebug
-  _consolePrintf("#define EmulatorDebug\n\n");
-#endif
+  _consolePrintf("%x,%x\n",IPC6,&IPC6->ARM7SelfCheck);
+  CheckGUID_Body();
   
-  _consolePrintf("boot %s\n%s\n%s\n\n",ROMTITLE,ROMVERSION,ROMDATE);
+  DrawBootWarn(bootwarn_b8zlib,bootwarn_b8zlib_Size,1);
   
-  _consolePrintf("ITCM0x%x,0x%x,0x%x\n",(u32)&__itcm_lma,(u32)&__itcm_start,(u32)&__itcm_end-(u32)&__itcm_start);
-  _consolePrintf("DTCM0x%x,0x%x,0x%x\n",(u32)&__dtcm_lma,(u32)&__dtcm_start,(u32)&__dtcm_end-(u32)&__dtcm_start);
-  _consolePrintf("\n");
-  CheckTCM(__LINE__);
- 
-//  FATTest();
+  SetARM9_REG_WaitCR();
+  extmem_Init();
+  extmem_ShowMemoryInfo();
   
-//  _test_ShowCP15(); while(1);
-  
-  strpcmSetVolume16(16);
-  
-  DMALinkInit();
-  
-  IPC3->strpcmLBuf=NULL;
-  IPC3->strpcmRBuf=NULL;
-  
-  pIMFS=new CIMFS();
-  if(pIMFS->InitIMFS()==false) while(1);
-  
-  //main_ShowWarn();
-  
-  pEXFS=new CIMFS();
-  if(pEXFS->InitEXFS()==false){
-    delete pEXFS; pEXFS=NULL;
+  SetARM9_REG_WaitCR();
+  if(FAT2_InitFiles()==false){
+    _consolePrint("FAT_InitFiles() failed.\n");
+    ShowLogHalt();
   }
+  SetARM9_REG_WaitCR();
   
+//  main_VarDebug();
   
-  _consolePrintf("Init FileSystem.\n");
-  FileSys_Init(256);
-  
-#ifdef DisableAutoDetect
-  Shell_AutoDetect_EXFS();
-#else
-  Shell_AutoDetect();
-#endif
-  
-  if(Shell_FindShellPath()==false) while(1);
-  
-  if(pEXFS!=NULL){
-    DD_Init(EDDST_CART);
-    }else{
-    DD_Init(EDDST_FAT);
-//    DD_Init(EDDST_CART);
-  }
-  Resume_Init();
-  Bookmark_Init();
- 
-  { cwl();
-    u8 *pank,*pl2u,*pfon;
-    int dummysize;
-    
-    _consolePrintf("load [system.ank]\n");
-    Shell_ReadFile("system.ank",(void**)&pank,&dummysize);
-    _consolePrintf("load [system.l2u]\n");
-    Shell_ReadFile("system.l2u",(void**)&pl2u,&dummysize);
-    _consolePrintf("load [system.fon]\n");
-    Shell_ReadFile("system.fon",(void**)&pfon,&dummysize);
-    
-    if((pank==NULL)||(pl2u==NULL)||(pfon==NULL)){ cwl();
-      _consolePrintf("notfound '/shell/system.ank|.l2u|.fon'\n\n");
-      _consolePrintf("'ChangeCodePage/cp(your codepage).bat' is executed. When GBFS is used, 'WriteFiles_gbfs.bat' is executed.\n\n");
-      _consolePrintf("Please refer to 'ChangeCodePage/codepage.txt' for CodePage.\n\n");
-      ShowLogHalt();
+  if(Shell_FAT_fopen_isExists_Data(LogFilename)==true){
+    FAT_FILE *pf=Shell_FAT_fopen_Data(LogFilename);
+    if(pf!=NULL){
+      _consoleSetLogFile(pf);
+      FAT2_fclose(pf);
     }
-    
-    Unicode_Init(pank,pl2u);
-    FontPro_Init(pfon);
   }
-  if(OpenSaveTypeFile()==0)
-  {
+  
+  Shell_ShellSet_Init();
+  
+  if(ShellSet.Cluster64k==false) FAT2_Disabled64kClusterMode();
+  
+  _consolePrintf("pDTCMEND=0x%08x, pMTCMEND=0x%08x. MTCM size=%dbyte.\n",pDTCMEND,pMTCMEND,(u32)pMTCMEND-(u32)pDTCMEND);
+  
+  pMTCMEND=(u32*)&mtcmend;
+  if((0x02804000-1536)<(u32)pMTCMEND){
+    _consolePrintf("MTCM overflow. 0x%08x 0x%08x\n",0x02800000+1536,pMTCMEND);
+    ShowLogHalt();
+  }
 
-	 _consolePrintf("\\n");
-  	_consolePrintf("Can't find 'Shell' folder on the MicroSD.\n");
-  	_consolePrintf("Loader is running in NOSKIN mode.\n");
-	_consolePrintf("Please visit http://www.ezflash.cn to download necessary software.\n");
-	_consolePrintf("Press A to continue.....\n");
-	while(1){cwl()
-		scanKeys();
-		if(keysUp()&KEY_A)
-		{
-			break;
-		}
-	}
-  } 
-  { cwl();
-    static volatile signed char sc=-1;
-    static volatile unsigned char uc=-1;
-    static volatile char c=-1;
+  {
+    _consolePrintf("Current stack pointer: 0x%08x.\n",stackptr);
+    for(s32 idx=0;idx<32;idx+=4){
+      _consolePrintf("0x%08x: 0x%08x, 0x%08x, 0x%08x, 0x%08x.\n",stackptr+((-16+idx)*4),stackdata[idx+0],stackdata[idx+1],stackdata[idx+2],stackdata[idx+3]);
+    }
+  }
+  
+  _consolePrintf("Start FPGA Initializer.\n");
+  FPGA_BusOwnerARM9();
+  isExistsROMEO2=false;
+  if(FPGA_isExistCartridge()==false){
+    _consolePrintf("Can not found ROMEO2 cartridge on GBA slot.\n");
+    }else{
+    bool halt=true;
+    void *pFPGAData=NULL;
+    s32 FPGADataSize=0;
+    if(Shell_FAT_ReadAlloc(FPGAFilename,&pFPGAData,&FPGADataSize)==false){
+      _consolePrintf("Can not found RAW file. [%s]\n",FPGAFilename);
+      }else{
+      if(FPGA_CheckBitStreamFormat(pFPGAData,FPGADataSize)==false){
+        _consolePrintf("ROMEO2 FPGA bit stream unknown format?\n");
+        }else{
+        if(FPGA_Start(pFPGAData,FPGADataSize)==false){
+          _consolePrintf("ROMEO2 configration failed.\n");
+          }else{
+          FPGA_BusOwnerARM7();
+          _consolePrintf("Wait for ARM7 init.\n");
+          IPC6->RequestFPGAInit=true;
+          while(IPC6->RequestFPGAInit==true);
+          _consolePrintf("Initialized.\n");
+          halt=false;
+          isExistsROMEO2=true;
+        }
+      }
+      safefree(pFPGAData); pFPGAData=NULL;
+    }
+    if(halt==true) ShowLogHalt();
+  }
+  
+  {
+    DateTime_ResetNow();
+    TDateTime dt=DateTime_GetNow();
+    TFAT2_TIME ft;
     
-    if((s32)c==(s32)sc) _consolePrintf("Default char is signed char.\n");
-    if((s32)c==(s32)uc) _consolePrintf("Default char is unsigned char.\n");
+    ft.Year=dt.Date.Year;
+    ft.Month=dt.Date.Month;
+    ft.Day=dt.Date.Day;
+    ft.Hour=dt.Time.Hour;
+    ft.Minuts=dt.Time.Min;
+    ft.Second=dt.Time.Sec;
+    
+    FAT2_SetSystemDateTime(ft);
   }
   
+  IPC6->LCDPowerControl=LCDPC_ON_BOTH;
   
-  InitINI();
-  LoadINI("global.ini");
-  LoadINI("skin.ini");
+  Shell_CheckDataPath();
   
-  {
-    TiniForSuperCard *ForSuperCard=&GlobalINI.ForSuperCard;
-    SetARM9_REG_ROM1stAccessCycleControl=ForSuperCard->ROM1stAccessCycleControl;
-    SetARM9_REG_ROM2stAccessCycleControl=ForSuperCard->ROM2stAccessCycleControl;
-    SetARM9_REG_WaitCR();
+  InitInterrupts();
+  strpcmSetVolume64(64);
+  
+  if(true){
+    u32 UserLanguage=(u32)-1;
+    u32 Timeout=0x10000;
+    
+    while(UserLanguage==(u32)-1){
+      UserLanguage=IPC6->UserLanguage;
+      Timeout--;
+      if(Timeout==0){
+        _consolePrintf("NDS farmware language read error. ARM7CPU stopped...?\n");
+        while(1);
+      }
+    }
+    _consolePrintf("NDS farmware language ID : %d\n",UserLanguage);
   }
   
-  DLLList_Init();
+  LangInitAndLoadFont();
   
-  strpcmSetVolume16(GlobalINI.System.SoundVolume);
-  
-  _consolePrintf("Resize FileSystem.\n");
-  FileSys_Init(GlobalINI.System.FileMaxCount);
-  
-  u32 Brightness=GlobalINI.System.NDSLiteDefaultBrightness;
-  if(Brightness==4){
-    Brightness=IPC3->DefaultBrightness;
-  }
-  NDSLite_Brightness=Brightness;
-  NDSLite_SetBrightness(NDSLite_Brightness);
-  
-  switch(GlobalINI.System.WhenPanelClose){
-    case EISWPC_BacklightOff: IPC3->WhenPanelClose=false; break;
-    case EISWPC_DSPowerOff: IPC3->WhenPanelClose=true; break;
-    case EISWPC_PlayShutdownSound: IPC3->WhenPanelClose=true; break;
-  }
-  
-  formdt_SetFormatDateStr(GlobalINI.ClockPlugin.FormatDate);
-  
-  switch(GlobalINI.System.TopScreenFlip){
-    case ESF_Normal: {
-      pScreenSub->SetFlipMode(0);
-    } break;
-    case ESF_Flip: {
-      pScreenSub->SetFlipMode(1);
-    } break;
-    case ESF_VFlip: {
-      pScreenSub->SetFlipMode(2);
-    } break;
-    case WFS_HFlip: {
-      pScreenSub->SetFlipMode(3);
-    } break;
-  }
-  
-  {
-    extern void mainloop(void);
-    mainloop();
-  }
+  chkflag=CheckGUID_Pre_for_CheckTCM();
+  CheckGUID_Body();
+}
+
+static __attribute__ ((noinline)) void main_ins_end(void)
+{
+  FAT2_FreeFiles();
   
   glDefaultClassFree();
   
-  ShowLogHalt();
+  _consolePrint("Terminated.\n");
+extern int main_wma(void);
+//  main_wma();
 }
 
-// ---------------------------------------
-
-static bool tpDragFlag=false;
-static bool tpIgnore=false;
-
-static TransferRegion3 RIPC3;
-
-static u16 KEYS_Stack=0;
-
-u16 KEYS_CUR=0;
-
-static void cartSetMenuMode(void)
+int main(void)
 {
-  *(vu16*)(0x04000204) &= ~0x0880;    //sysSetBusOwners(true, true);
-
-  *((vu32*)0x027FFFF8) = 0x080000C0; // ARM7 reset address
-}
-
-static void cartSetMenuMode_MPCF(void)
-{
-  cartSetMenuMode();
-}
-
-static void cartSetMenuMode_EZSD(void)
-{
-  cartSetMenuMode();
-}
-
-static void cartSetMenuMode_M3CFSD(void)
-{
-  cartSetMenuMode();
-
-  u32 mode = 0x00400004;
-  vu16 tmp;
-  tmp = *(vu16*)(0x08E00002);
-  tmp = *(vu16*)(0x0800000E);
-  tmp = *(vu16*)(0x08801FFC);
-  tmp = *(vu16*)(0x0800104A);
-  tmp = *(vu16*)(0x08800612);
-  tmp = *(vu16*)(0x08000000);
-  tmp = *(vu16*)(0x08801B66);
-  tmp = *(vu16*)(0x08000000 + (mode << 1)); 
-  tmp = *(vu16*)(0x0800080E);
-  tmp = *(vu16*)(0x08000000);
-
-  tmp = *(vu16*)(0x080001E4);
-  tmp = *(vu16*)(0x080001E4);
-  tmp = *(vu16*)(0x08000188);
-  tmp = *(vu16*)(0x08000188);
-}
-
-static void cartSetMenuMode_SCCFSD(void)
-{
-  cartSetMenuMode();
-
-  *(vu16*)0x09FFFFFE = 0xA55A;
-  *(vu16*)0x09FFFFFE = 0xA55A;
-  *(vu16*)0x09FFFFFE = 0;
-  *(vu16*)0x09FFFFFE = 0;
-  *((vu32*)0x027FFFF8) = 0x08000000; // Special ARM7 reset address
-}
-
-void ScanIPC3(bool useStack)
-{ cwl();
-#ifdef notuseIPCKey
-  RIPC3=*(TransferRegion3*)IPC3;
+  REG_IME=0;
   
-  RIPC3.touchXpx=IPC->touchXpx;
-  RIPC3.touchYpx=IPC->touchYpx;
-  RIPC3.buttons=IPC->buttons;
+  main_ins_start();
   
-  KEYS_CUR=(~REG_KEYINPUT)&0x3ff;
-//  KEYS_CUR|=((~RIPC3.buttons)&3)<<10;
-//  KEYS_CUR|=((~RIPC3.buttons)<<6) & KEY_TOUCH;
-  
-  swiWaitForVBlank();
-  VsyncPassedCount=1;
-  
-  return;
-#endif
-  
-  if(ExecMode==EM_DPG){ cwl();
-    IPC3->ReqVsyncUpdate=2;
-    }else{ cwl();
-    IPC3->ReqVsyncUpdate=1;
-    while(IPC3->ReqVsyncUpdate!=0){ cwl();
-      swiDelay(1);
-    }
+  {
+    SetARM9_REG_WaitCR();
+    PrintFreeMem();
+    mainloop();
+    PrintFreeMem();
   }
-  
-  MemCopy32DMA3((void*)IPC3,&RIPC3,sizeof(TransferRegion)+4); // 奼挘晹暘偼梫傜側偄
-  
-  KEYS_CUR=0;
   
   REG_IME=0;
-  if(useStack==true) KEYS_CUR=KEYS_Stack;
-  KEYS_Stack=0;
-  REG_IME=1;
   
-  u32 btns=~RIPC3.buttons;
+  main_ins_end();
   
-  KEYS_CUR|=(~REG_KEYINPUT)&0x3ff;
-  if((btns&IPC_PEN_DOWN)!=0) KEYS_CUR|=KEY_TOUCH;
-  if((btns&IPC_X)!=0) KEYS_CUR|=KEY_X;
-  if((btns&IPC_Y)!=0) KEYS_CUR|=KEY_Y;
-  
-  if(ExecMode!=EM_DPG){
-    if(KEYS_CUR!=0){
-      if(RefreshBacklightOffCount()==true) tpIgnore=true;
-    }
-  }
-  
-  if(KEYS_CUR==(KEY_L|KEY_R|KEY_A|KEY_B)){
-    videoSetModeSub_SetShowLog(true);
-    
-    _consolePrintf("Resume save...\n");
-    {
-      EExecMode em=ExecMode;
-      if(em!=EM_DPG){
-        Resume_Backup(false);
-        if(em==EM_Text){
-          Bookmark_CurrentResumeBackup();
-          Bookmark_Save();
-        }
-      }
-    }
-    
-    _consolePrintf("FS_ExecuteStop...\n");
-    FS_ExecuteStop();
-    
-    _consolePrintf("play shutdown.mp3 from shell\n");
-    if(MP3Boot_PlayFileFromShell("shutdown.mp3")==false){
-      IPC3->LCDPowerControl=LCDPC_SOFT_POWEROFF;
-      while(1);
-    }
-    
-    _consolePrintf("wait for sound terminate.\n");
-    while(strpcmRequestStop==false){
-      strpcmUpdate_mainloop();
-//      swiWaitForVBlank();
-    }
-    
-    _consolePrintf("wait for sound empty.\n");
-    strpcmRingEmptyFlag=false;
-    while(strpcmRingEmptyFlag==false){ cwl();
-      swiWaitForIRQ();
-    }
-    
-    _consolePrintf("Execute stop.\n");
-    FS_ExecuteStop();
-    
-    _consolePrintf("go to farmware menu. [%s]\n",DIMediaName);
-    
-    IPC3->RESET=RESET_NULL;
-    
-    switch(DIMediaType){
-      case DIMT_NONE: break;
-      case DIMT_M3CF: cartSetMenuMode_M3CFSD(); IPC3->RESET=RESET_MENU_M3CF; break;
-      case DIMT_M3SD: cartSetMenuMode_M3CFSD(); IPC3->RESET=RESET_MENU_M3SD; break;
-      case DIMT_MPCF: cartSetMenuMode_MPCF(); IPC3->RESET=RESET_MENU_MPCF; break;
-      case DIMT_MPSD: break;
-      case DIMT_SCCF: cartSetMenuMode_SCCFSD(); IPC3->RESET=RESET_MENU_SCCF; break;
-      case DIMT_SCSD: cartSetMenuMode_SCCFSD(); IPC3->RESET=RESET_MENU_SCSD; break;
-      case DIMT_FCSR: break;
-      case DIMT_NMMC: break;
-      case DIMT_EZSD: cartSetMenuMode_EZSD(); IPC3->RESET=RESET_MENU_EZSD; break;
-      case DIMT_MMCF: break;
-      case DIMT_SCMS: break;
-      case DIMT_EWSD: break;
-      case DIMT_NJSD: break;
-      case DIMT_DLMS: IPC3->RESET=RESET_MENU_DSLink; LinkReset_ARM9(); while(1); break;
-      case DIMT_G6FC: break;
-    }
-    
-    if(IPC3->RESET==RESET_NULL){
-      _consolePrintf("not support adapter type.\n");
-      while(1);
-    }
-    
-    *(vu16*)(0x04000208) = 0;           //REG_IME = IME_DISABLE;
-    *(vu16*)(0x04000204) |= 0x0880;     //sysSetBusOwners(false, false);
-    *((vu32*)0x027FFFFC) = 0;
-    *((vu32*)0x027FFE04) = (u32)0xE59FF018;
-    *((vu32*)0x027FFE24) = (u32)0x027FFE04;
-    asm("swi 0x00");                    //swiSoftReset();
-    asm("bx lr");
-    
-    while(1);
-  }
-  
+  return(0);
 }
 
-// -----------------------------------------
+// -------------------------------- mainloop
 
-void WaitKeyClear(bool SoundUpdateFlag)
-{ cwl();
-  ScanIPC3(true);
-  while(KEYS_CUR!=0){ cwl();
-    if(SoundUpdateFlag==true){
-      while(strpcmUpdate_mainloop()==true){ cwl();
+void WaitForVBlank(void)
+{
+  if(VBlankPassedFlag==false){
+    swiWaitForVBlank();
+  }
+  VBlankPassedFlag=false;
+}
+
+// ------------------------------------------------------------
+
+static TCallBack CallBack;
+
+static void CallBackInit(void)
+{
+  MemSet32CPU(0,&CallBack,sizeof(TCallBack));
+}
+
+void CallBack_ExecuteVBlankHandler(void)
+{
+  if(CallBack.VBlankHandler!=NULL) CallBack.VBlankHandler();
+}
+
+TCallBack* CallBack_GetPointer(void)
+{
+  return(&CallBack);
+}
+
+// ------------------------------------------------------------
+
+static bool mf;
+static s32 mx,my;
+
+static void Proc_TouchPad(u32 VsyncCount)
+{
+  if(IPC6->RequestUpdateIPC==true) return;
+  
+  bool tpress;
+  s32 tx,ty;
+  
+  if((IPC6->buttons&IPC_PEN_DOWN)==0){
+    tpress=false;
+    tx=0;
+    ty=0;
+    }else{
+    tpress=true;
+    tx=IPC6->touchXpx;
+    ty=IPC6->touchYpx;
+  }
+  
+  IPC6->RequestUpdateIPC=true;
+  
+  if(tpress==true){
+    if(mf==false){
+      mf=true;
+      if(CallBack.MouseDown!=NULL) CallBack.MouseDown(tx,ty);
+      mx=tx;
+      my=ty;
+      }else{
+      s32 dx=abs(mx-tx);
+      s32 dy=abs(my-ty);
+      if((1<=dx)||(1<=dy)){
+        if(CallBack.MouseMove!=NULL) CallBack.MouseMove(tx,ty);
+        mx=tx;
+        my=ty;
       }
     }
-    swiWaitForVBlank();
-    ScanIPC3(true);
+    }else{
+    if(mf==true){
+      mf=false;
+      if(CallBack.MouseUp!=NULL) CallBack.MouseUp(mx,my);
+    }
   }
 }
 
 #include "main_keyrepeat.h"
 
-#include "main_keyinput.h"
+static u32 KEYS_Last;
+static bool KEYS_PressedLR;
+static u32 KEYS_PressStartCount,KEYS_PressSelectCount;
+static bool KEYS_HPSwitch_Pressed;
 
-// -----------------------------------------
-
-static void mainloop_RandomInit(void)
+void Proc_KeyInput_Init(void)
 {
-#ifdef notuseIPCKey
-  return;
-#endif
-  
-  _consolePrintf("Initialize random seed.\n");
-  
-  u32 chk=0;
-  u32 retry=0x100;
-  
-  while(chk==0){
-    IPC3->curtimeFlag=true;
-    while(IPC3->curtimeFlag==true){
-      IPC3->ReqVsyncUpdate=1;
-      while(IPC3->ReqVsyncUpdate!=0){ cwl();
-        swiDelay(1);
-      }
-    }
-    
-    for(u32 cnt=0;cnt<8;cnt++){ cwl();
-      chk=(chk*60)+IPC3->curtime[cnt];
-    }
-    
-    retry--;
-    if(retry==0) break;
-  }
-  
-  srand(chk);
-  for(u32 idx=0;idx<(chk&0xff);idx++) rand();
-  
-  _consolePrintf("Initialized. random seed = %d\n",chk);
+  KEYS_Last=~0;
+  KEYS_PressedLR=false;
+  KEYS_PressStartCount=0;
+  KEYS_PressSelectCount=0;
+  KEYS_HPSwitch_Pressed=false;
 }
 
-static void mainloop_TimeInit(void)
-{
-  MemSet32CPU(0,&CurrentTime,sizeof(TPlugin_ClockLib_Time));
-  
-  TPlugin_ClockLib_Time *pCT=&CurrentTime;
-  
-  pCT->SystemRTC24Hour=GlobalINI.ClockPlugin.RTC24Hour;
-  
-/*
-  _consolePrintf("clk=%x\n",pPluginBodyClock);
-  if(pPluginBodyClock!=NULL){
-    pPluginBodyClock->pCL->UpdateVsync(pScreenSub->GetVRAMBuf(),1,PluginBodyClock_RequestRefresh,CurrentTime);
-    PluginBodyClock_RequestRefresh=false;
-  }
-*/
-}
+#include "main_savepreview.h"
 
-static void mainloop_TimeRead(void)
+void Proc_KeyInput(u32 VsyncCount)
 {
-  TPlugin_ClockLib_Time *pCT=&CurrentTime;
-  
-  pCT->Year=2000+RIPC3.curtime[1];
-  pCT->Month=RIPC3.curtime[2];
-  pCT->Day=RIPC3.curtime[3];
-  pCT->Hour=RIPC3.curtime[5];
-  pCT->Minuts=RIPC3.curtime[6];
-  pCT->Second=RIPC3.curtime[7];
-  
-  if(52<=pCT->Hour) pCT->Hour-=(52-12);
-  
-  {
-    static u32 Temperature=0;
-    u32 SrcTemperature=IPC3->temperature;
-    if(Temperature==0){ cwl();
-      Temperature=SrcTemperature;
-      pCT->Temperature12=SrcTemperature;
-      }else{ cwl();
-      pCT->Temperature12=((Temperature*15)+SrcTemperature)/16;
-    }
-  }
-}
-
-static void mainloop_ProcVsync(u32 VsyncCount)
-{ cwl();
   if(KeyRepeatFlag==true){ cwl();
     if(KeyRepeatCount<=VsyncCount){ cwl();
       KeyRepeatCount=0;
       }else{ cwl();
       KeyRepeatCount-=VsyncCount;
     }
-    ScanIPC3(false); // 僆乕僩儕僺乕僩拞偼Vsync偱KEYS傪娔帇偟側偄丅
-    }else{ cwl();
-    ScanIPC3(true);
   }
   
-  if(ExecMode!=EM_DPG){ cwl();
-    if(RIPC3.curtimeFlag==false){ cwl();
-      IPC3->curtimeFlag=true;
-      
-      u32 chk=0;
-      for(u32 cnt=0;cnt<8;cnt++){ cwl();
-        chk+=RIPC3.curtime[cnt];
-      }
-      
-      if(chk==0){ cwl();
-        MWin_SetWindowTitle(WM_DateTime,"NotImplement RTC.");
-        MWin_TransWindow(WM_DateTime);
-        }else{ cwl();
-        static u32 sec=0xff;
-        if(sec!=RIPC3.curtime[7]){ cwl();
-          sec=RIPC3.curtime[7];
-          
-          mainloop_TimeRead();
-          
-          if(thumbGetDrawed()==false){
-            char str[128];
-            
-            TPlugin_ClockLib_Time *pCT=&CurrentTime;
-            
-            char *pstr=str;
-            
-            pstr+=formdt_FormatDate(pstr,128,pCT->Year,pCT->Month,pCT->Day);
-            
-            if(GlobalINI.ClockPlugin.RTC24Hour==true){
-              sprintf(pstr," %d:%02d:%02d %4.1fC",pCT->Hour,pCT->Minuts,pCT->Second,((float)pCT->Temperature12) / 0x1000);
-              }else{
-              if(pCT->Hour<12){
-                sprintf(pstr," AM%d:%02d:%02d %4.1fC",pCT->Hour,pCT->Minuts,pCT->Second,((float)pCT->Temperature12) / 0x1000);
-                }else{
-                sprintf(pstr," PM%d:%02d:%02d %4.1fC",pCT->Hour-12,pCT->Minuts,pCT->Second,((float)pCT->Temperature12) / 0x1000);
-              }
-            }
-            
-            MWin_SetWindowTitle(WM_DateTime,str);
-            MWin_TransWindow(WM_DateTime);
-          }
-          
+  u32 KEYS_Cur=(~REG_KEYINPUT)&0x3ff;
+  
+  {
+    u32 btns=IPC6->buttons;
+    
+    KEYS_Cur|=(~REG_KEYINPUT)&0x3ff;
+    if((btns&IPC_PEN_DOWN)!=0) KEYS_Cur|=KEY_TOUCH;
+    if((btns&IPC_X)!=0) KEYS_Cur|=KEY_X;
+    if((btns&IPC_Y)!=0) KEYS_Cur|=KEY_Y;
+  }
+  
+  {
+    const u32 Timeout=60*3;
+    if((KEYS_Cur & KEY_START)!=0){
+      if(KEYS_PressStartCount<Timeout){
+        KEYS_PressStartCount+=VsyncCount;
+        if(Timeout<=KEYS_PressStartCount){
+          if(CallBack.KeyLongPress!=NULL) CallBack.KeyLongPress(KEY_START);
+          KEYS_PressStartCount=Timeout;
         }
-        
-        if(PluginBodyClock_Execute==true){
-          if(pPluginBodyClock!=NULL){
-            bool RunningFile;
-            if(ExecMode==EM_None){
-              RunningFile=false;
-              }else{
-              RunningFile=true;
-            }
-            pPluginBodyClock->pCL->UpdateVsync(pScreenSub->GetVRAMBuf(),VsyncCount,RunningFile,PluginBodyClock_RequestRefresh,CurrentTime);
-            PluginBodyClock_RequestRefresh=false;
-            KEYS_CUR=pPluginBodyClock->pCL->ProcKeys(KEYS_CUR);
-          }
-        }
-        
       }
+      }else{
+      if((KEYS_PressStartCount!=0)&&(KEYS_PressStartCount!=Timeout)){
+        if(CallBack.KeyPress!=NULL) CallBack.KeyPress(VsyncCount,KEY_START);
+      }
+      KEYS_PressStartCount=0;
+    }
+    KEYS_Cur&=~KEY_START;
+  }
+  
+  {
+    const u32 Timeout=60*3;
+    if((KEYS_Cur & KEY_SELECT)!=0){
+      if(KEYS_PressSelectCount<Timeout){
+        KEYS_PressSelectCount+=VsyncCount;
+        if(Timeout<=KEYS_PressSelectCount){
+          main_SavePreviewAndHalt();
+          ShowLogHalt();
+        }
+      }
+      }else{
+      if((KEYS_PressSelectCount!=0)&&(KEYS_PressSelectCount!=Timeout)){
+        if(CallBack.KeyPress!=NULL) CallBack.KeyPress(VsyncCount,KEY_SELECT);
+      }
+      KEYS_PressSelectCount=0;
+    }
+    KEYS_Cur&=~KEY_SELECT;
+  }
+  
+  if((KEYS_Cur&(KEY_L|KEY_R))==(KEY_L|KEY_R)){
+    if(KEYS_PressedLR==false){
+      KEYS_PressedLR=true;
+      if(CallBack.KeySameLRDown!=NULL) CallBack.KeySameLRDown();
+    }
+  }
+  if((KEYS_Cur&(KEY_L|KEY_R))!=(KEY_L|KEY_R)){
+    if(KEYS_PressedLR==true){
+      KEYS_PressedLR=false;
+      if(CallBack.KeySameLRUp!=NULL) CallBack.KeySameLRUp();
     }
   }
   
-  u32 NowKey=KEYS_CUR;
+  const u32 DupMask=KEY_A|KEY_B|KEY_X|KEY_Y|KEY_UP|KEY_DOWN|KEY_LEFT|KEY_RIGHT;
   
-  switch(GlobalINI.System.ClosedSholderButton){ cwl();
-    case ECSB_Disabled: { cwl();
-      if(RIPC3.buttons == 0x00FF) NowKey&=~(KEY_L | KEY_R);
-    } break;
-    case ECSB_Flexible: { cwl();
-      static u16 FirstPressBtn=0;
-      if(RIPC3.buttons != 0x00FF){
-        FirstPressBtn=0;
-        }else{
-        u16 sbtn=NowKey&(KEY_L | KEY_R);
-        NowKey&=~(KEY_L | KEY_R);
-        
-        if(sbtn!=(KEY_L | KEY_R)){
-          FirstPressBtn=sbtn;
-          }else{
-          if(FirstPressBtn==KEY_L) NowKey|=KEY_R;
-          if(FirstPressBtn==KEY_R) NowKey|=KEY_L;
-          FirstPressBtn=0;
-        }
-      }
-    } break;
-    case ECSB_AlwaysDisabled: { cwl();
-      NowKey&=~(KEY_L | KEY_R);
-    } break;
-    case ECSB_Enabled: { cwl();
-    } break;
+  if((KEYS_Last&DupMask)!=0){
+    u32 l=KEYS_Last&DupMask;
+    u32 c=KEYS_Cur&DupMask;
+    
+    KEYS_Cur&=KEYS_Last;
   }
   
-  if(NowKey & KEY_SELECT){ cwl();
-    strpcmDoubleSpeedFlag=true;
-    }else{ cwl();
-    strpcmDoubleSpeedFlag=false;
+  KEYS_Last=KEYS_Cur;
+  KEYS_Cur=KeyRepeat_Proc(KEYS_Cur,VsyncCount);
+  
+  if(8<VsyncCount) VsyncCount=8;
+  
+  if(KEYS_Cur!=0){
+    if(CallBack.KeyPress!=NULL) CallBack.KeyPress(VsyncCount,KEYS_Cur);
   }
   
-  NowKey=KeyRepeat_Proc(NowKey);
-  
-  if(RequestFileCloseFromMWin==true){
-    RequestFileCloseFromMWin=false;
-    NowKey=KEY_B;
-  }
-  
-  ProcessKeys(NowKey);
-  
-  ProcessTouchPad();
 }
 
-static void ProcDPG(void)
-{ cwl();
-  if(DPG_RequestSyncStart==true){ cwl();
-    _consolePrintf("DPG_RequestSyncStart\n");
-    DPG_RequestSyncStart=false;
-    
-    switch(DPG_GetDPGAudioFormat()){
-      case DPGAF_GSM: {
-        strpcmStart(true,DPG_GetSampleRate(),DPG_GetSamplePerFrame(),DPG_GetChannelCount(),SPF_GSM);
-      } break;
-      case DPGAF_MP2: {
-        strpcmStart(false,DPG_GetSampleRate(),8,0,SPF_MP2);
-      } break;
+static bool Proc_PanelOpened_Last;
+
+static void Proc_PanelOpened(void)
+{
+  if(Proc_PanelOpened_Last!=IPC6->PanelOpened){
+    Proc_PanelOpened_Last=IPC6->PanelOpened;
+    if(Proc_PanelOpened_Last==true){
+      if(CallBack.PanelOpen!=NULL) CallBack.PanelOpen();
+      }else{
+      if(CallBack.PanelClose!=NULL) CallBack.PanelClose();
     }
-    
-    while(IPC3->IR_flash==true){
-    }
-    
+  }
+}
+
+#include "main_Trigger.h"
+
+// ------------------------------------------------------------
+
+EProcFadeEffect ProcFadeEffect;
+
+static const u32 HorizontalFadeStepCount=35;
+static const u32 HorizontalFadeStep[HorizontalFadeStepCount]={2,4,4,6,6,8,8,8,8,10,10,10,10,10,10,10,10,10,10,10,10,8,8,8,8,8,8,6,6,6,4,4,4,2,2,};
+
+static const u32 VerticalFadeStepCount=27;
+static const u32 VerticalFadeStep[VerticalFadeStepCount]={2,4,5,7,8,8,9,9,9,9,9,9,9,9,9,9,9,9,8,8,7,7,6,5,4,3,2,};
+
+void ScreenMain_Flip_ProcFadeEffect(void)
+{
+  if(NextProc!=ENP_Loop) return;
+  
+  if(ProcState.System.EnableFadeEffect==false) ProcFadeEffect=EPFE_None;
+  
+  u16 *pviewbuf=pScreenMain->pViewCanvas->GetVRAMBuf();
+  u16 *pbackbuf=pScreenMain->pBackCanvas->GetVRAMBuf();
+  
+  switch(ProcFadeEffect){
+    case EPFE_None: {
+    } break;
+    case EPFE_LeftToRight: {
+      u32 sx=0;
+      for(u32 idx=0;idx<HorizontalFadeStepCount;idx++){
+        u32 step=HorizontalFadeStep[idx];
+        Splash_Update();
+        swiWaitForVBlank();
+        u16 tmpbuf[ScreenWidth];
+        for(u32 y=0;y<ScreenHeight;y++){
+          u16 *pviewlinebuf=&pviewbuf[y*ScreenWidth];
+          u16 *pbacklinebuf=&pbackbuf[y*ScreenWidth];
+          MemCopy32CPU(&pviewlinebuf[0],tmpbuf,(ScreenWidth-step)*2);
+          MemCopy32CPU(tmpbuf,&pviewlinebuf[step],(ScreenWidth-step)*2);
+          MemCopy32CPU(&pbacklinebuf[ScreenWidth-step-sx],&pviewlinebuf[0],step*2);
+        }
+        sx+=step;
+      }
+    } break;
+    case EPFE_RightToLeft: {
+      u32 sx=0;
+      for(u32 idx=0;idx<HorizontalFadeStepCount;idx++){
+        u32 step=HorizontalFadeStep[idx];
+        Splash_Update();
+        swiWaitForVBlank();
+        for(u32 y=0;y<ScreenHeight;y++){
+          u16 *pviewlinebuf=&pviewbuf[y*ScreenWidth];
+          u16 *pbacklinebuf=&pbackbuf[y*ScreenWidth];
+          MemCopy32CPU(&pviewlinebuf[step],&pviewlinebuf[0],(ScreenWidth-step)*2);
+          MemCopy32CPU(&pbacklinebuf[sx],&pviewlinebuf[ScreenWidth-step],step*2);
+        }
+        sx+=step;
+      }
+    } break;
+    case EPFE_UpToDown: {
+      u32 sy=0;
+      for(u32 idx=0;idx<VerticalFadeStepCount;idx++){
+        u32 step=VerticalFadeStep[idx];
+        Splash_Update();
+        swiWaitForVBlank();
+        s32 y;
+        y=ScreenHeight-(step*2);
+        y=(y/step)*step;
+        for(;y>=0;y-=step){
+          u16 *pviewlinebuf=&pviewbuf[y*ScreenWidth];
+          MemCopy32CPU(&pviewlinebuf[0*ScreenWidth],&pviewlinebuf[step*ScreenWidth],(step*ScreenWidth)*2);
+        }
+        u16 *pviewlinebuf=&pviewbuf[0*ScreenWidth];
+        u16 *pbacklinebuf=&pbackbuf[0*ScreenWidth];
+        MemCopy32CPU(&pbacklinebuf[(ScreenHeight-step-sy)*ScreenWidth],&pviewlinebuf[0*ScreenWidth],(step*ScreenWidth)*2);
+        sy+=step;
+      }
+    } break;
+    case EPFE_DownToUp: {
+      u32 sy=0;
+      for(u32 idx=0;idx<VerticalFadeStepCount;idx++){
+        u32 step=VerticalFadeStep[idx];
+        Splash_Update();
+        swiWaitForVBlank();
+        for(u32 y=0;y<ScreenHeight-step;y+=step){
+          u16 *pviewlinebuf=&pviewbuf[y*ScreenWidth];
+          MemCopy32CPU(&pviewlinebuf[step*ScreenWidth],&pviewlinebuf[0*ScreenWidth],(step*ScreenWidth)*2);
+        }
+        u16 *pviewlinebuf=&pviewbuf[0*ScreenWidth];
+        u16 *pbacklinebuf=&pbackbuf[0*ScreenWidth];
+        MemCopy32CPU(&pbacklinebuf[sy*ScreenWidth],&pviewlinebuf[(ScreenHeight-step)*ScreenWidth],(step*ScreenWidth)*2);
+        sy+=step;
+      }
+    } break;
+    case EPFE_CrossFade: {
+      for(u32 idx=16;idx>0;idx--){
+        Splash_Update();
+        WaitForVBlank();
+        pScreenMain->SetBlendLevel(idx);
+        while(VBlankPassedFlag==false){
+          DLLSound_Update();
+        }
+      }
+    } break;
+    case EPFE_FastCrossFade: {
+      for(u32 idx=16;idx>0;idx-=4){
+        Splash_Update();
+        WaitForVBlank();
+        pScreenMain->SetBlendLevel(idx);
+        while(VBlankPassedFlag==false){
+          DLLSound_Update();
+        }
+      }
+    } break;
+  }
+  pScreenMain->Flip(true);
+  
+  if(ProcFadeEffect!=EPFE_None){
+    ProcFadeEffect=EPFE_None;
     REG_IME=0;
-    VsyncPassedCount=0;
+    VBlankPassedCount=1;
     REG_IME=1;
-    
-    while(strpcmUpdate_mainloop()==true){ cwl();
-    }
-    
-    return;
-  }
-  
-  if(strpcmGetPause()==true) return;
-  
-  s64 CurrentSamplesCount=IPC3->IR_samples;
-  if(CurrentSamplesCount<0) CurrentSamplesCount=0;
-  if(UpdateDPG_Video((u64)CurrentSamplesCount)==false){ cwl();
-    strpcmRequestStop=true;
-    return;
   }
 }
 
-void Proc_StartSound_AutoPlay(void)
+// ------------------------------------------------------------
+
+static void Proc_ExternalPowerPresent(void)
 {
-  Shuffle_Clear();
+  static bool LastState;
   
-  FS_PlayIndex=0;
+  static bool FirstStart=true;
+  if(FirstStart==true){
+    FirstStart=false;
+    LastState=IPC6->ExternalPowerPresent;
+    return;
+  }
   
-  while(1){ cwl();
-    FS_PlayIndex=Shuffle_GetNextIndex(FS_PlayIndex);
-    if(FS_PlayIndex==-1) return;
-    
-    if(FileSys_GetFileType(FS_PlayIndex)==FT_File){ cwl();
-      EExecMode EM=FS_GetExecMode(FS_PlayIndex);
-      
-      if((EM==EM_MSPSound)||(EM==EM_GMENSF)||(EM==EM_GMEGBS)){
-        FS_StartFromIndex(FS_PlayIndex);
-        WaitKeyClear(true);
-        RefreshBacklightOffCount();
-        break;
-      }
-    }
+  bool curstate=IPC6->ExternalPowerPresent;
+  if(LastState==curstate) return;
+  LastState=curstate;
+  
+  if(curstate==true){
+    if(CallBack.ExternalPowerAttach!=NULL) CallBack.ExternalPowerAttach();
+    }else{
+    if(CallBack.ExternalPowerDetach!=NULL) CallBack.ExternalPowerDetach();
   }
 }
 
-void Proc_Shutdown(void)
+// ------------------------------------------------------------
+
+static void mainloop_autoboot(const char *pFilename)
 {
-  videoSetModeSub_SetShowLog(true);
-  
-  _consolePrintf("Resume save...\n");
+  const UnicodeChar PathUnicode[2]={(UnicodeChar)'/',0};
+  UnicodeChar FilenameUnicode[16];
+  StrConvert_Ank2Unicode(pFilename,FilenameUnicode);
+  if(FileExistsUnicode(PathUnicode,FilenameUnicode)==true){
+    _consolePrintf("Auto booting... [/%s]\n",pFilename);
+    BootROM_SetInfo_NoLaunch(PathUnicode,FilenameUnicode);
+  }
+}
+
+#include "bootreply_b8zlib.h"
+
+// ------------------------------------------------------------
+
+static __attribute__ ((noinline)) void mainloop_ins_start(void)
+{
   {
-    EExecMode em=ExecMode;
-    if(em!=EM_DPG){
-      Resume_Backup(false);
-      if(em==EM_Text){
-        Bookmark_CurrentResumeBackup();
-        Bookmark_Save();
-      }
-    }
+    Lang_Load();
+    const char *pfmt=Lang_GetUTF8("DateTimeFormat");
+    if(isStrEqual_NoCaseSensitive(pfmt,"YYYYMMDD")==true) Date_SetDateFormat(EDF_YMD);
+    if(isStrEqual_NoCaseSensitive(pfmt,"DDMMYYYY")==true) Date_SetDateFormat(EDF_DMY);
+    if(isStrEqual_NoCaseSensitive(pfmt,"MMDDYYYY")==true) Date_SetDateFormat(EDF_MDY);
   }
   
-  _consolePrintf("FS_ExecuteStop...\n");
-  FS_ExecuteStop();
+  ProcState_Init();
+  ProcState_Load();
   
-  _consolePrintf("Shutdown...\n");
-  switch(GlobalINI.System.WhenPanelClose){
-    case EISWPC_BacklightOff: case EISWPC_DSPowerOff: {
-      IPC3->LCDPowerControl=LCDPC_SOFT_POWEROFF;
+  if(chkflag==true){
+    ProcState.System.BootCount++;
+    if(ProcState.System.BootCount==16){
+      DrawBootWarn(bootreply_b8zlib,bootreply_b8zlib_Size,1);
       while(1);
-    } break;
-    case EISWPC_PlayShutdownSound: break; // next
-  }
-  
-  _consolePrintf("play shutdown.mp3 from shell\n");
-  if(MP3Boot_PlayFileFromShell("shutdown.mp3")==false){
-    IPC3->LCDPowerControl=LCDPC_SOFT_POWEROFF;
-    while(1);
-  }
-  
-  _consolePrintf("wait for sound terminate.\n");
-  while(strpcmRequestStop==false){
-    strpcmUpdate_mainloop();
-//    swiWaitForVBlank();
-  }
-  
-  _consolePrintf("wait for sound empty.\n");
-  strpcmRingEmptyFlag=false;
-  while(strpcmRingEmptyFlag==false){ cwl();
-    swiWaitForIRQ();
-  }
-  
-  _consolePrintf("Execute stop.\n");
-  FS_ExecuteStop();
-  
-  _consolePrintf("Power off.\n");
-  IPC3->LCDPowerControl=LCDPC_SOFT_POWEROFF;
-  
-  while(1);
-}
-
-#include "mediatype.h"
-
-static void _test_PrintMediaType(bool keywait)
-{
-  _consolePrintf("MediaType:");
-  
-  if(DIMediaType==DIMT_NONE){
-    _consolePrintf("could not find a working IO Interface\n");
-    }else{
-    _consolePrintf("%s\n",DIMediaName);
-  }
-  
-  if(keywait==false) return;
-  
-  ScanIPC3(true);
-  while(KEYS_CUR==0){ cwl();
-    swiWaitForVBlank();
-    ScanIPC3(true);
-  }
-  WaitKeyClear(false);
-}
-
-void strpcmRequestStop_Proc(void)
-{
-  switch(ExecMode){
-    case EM_DPG: {
-      FS_ExecuteStop();
-      FS_MusicNext(GlobalINI.System.MusicNext);
-      RefreshBacklightOffCount();
-    } break;
-    case EM_None: case EM_MP3Boot: case EM_NDSROM: case EM_FPK: {
-    } break;
-    case EM_MSPImage: {
-    } break;
-    case EM_Text: {
-    } break;
-    case EM_MSPSound: case EM_GMENSF: case EM_GMEGBS: { // case EM_GMEVGM: case EM_GMEGYM: {
-      strpcmRingEmptyFlag=false;
-      while(strpcmRingEmptyFlag==false){ cwl();
-        swiWaitForIRQ();
-      }
-      FS_ExecuteStop();
-      FS_MusicNext(GlobalINI.System.MusicNext);
-      if(ExecMode==EM_None) RefreshBacklightOffCount();
-    } break;
-  }
-  
-/*
-  {
-    FS_SetCursor(FS_PlayIndex);
-    MWin_SetSBarVPos(WM_FileSelect,FS_TopIndex);
-    MWin_DrawSBarVH(WM_FileSelect);
-    MWin_DrawClient(WM_FileSelect);
-    MWin_TransWindow(WM_FileSelect);
-  }
-*/
-}
-
-void mainloop(void)
-{ cwl();
-  InitInterrupts();
-  IPC3->heartbeat=1;
-  swiWaitForVBlank();
-  _consolePrintf("VBlankPassed.\n");
-  
-  videoSetModeSub_SetShowLog(true);
-  MWin_Init();
-  
-  MWin_InitVideoOverlay();
-  MWin_SetVideoWideFlag(false);
-  MWin_ClearVideoOverlay();
-  MWin_SetVideoOverlaySize(0,0,0);
-  MWin_SetVideoOverlay(false);
-  MWin_SetVideoFullScreen(true);
-  
-  MWin_SetActive(WM_About);
-  MWin_SetActive(WM_DateTime);
-  MWin_SetActive(WM_FileSelect);
-  MWin_RefreshScreenMask();
-  
-  MWin_SetSBarV(WM_About,11,5,0);
-  MWin_SetSBarV(WM_Help,22+1,8,0);
-  
-  { cwl();
-    char str[128];
-    sprintf(str,"About... %s",ROMTITLE);
-    MWin_SetWindowTitle(WM_About,str);
-  }
-  //加载语言库
-  dsCardi_SetRompage(0);
-  u8 *pFlash = (u8*)safemalloc(0x2000);
-//  BL_ReadFlashBuffer(ROM_OFF,pFlash,0x2000);
-  ResetFlash();
-  for(s16 ii=0;ii<0x2000;ii+=0x200)
-	  dsCardi_ReadCard(ROM_OFF+ii,&pFlash[ii]);	
-  gl_language = pFlash[0];
-  gl_speedAuto = pFlash[1];
-  gl_SaveType=pFlash[4];
-  LoadLanguage();
-  if(gl_speedAuto!=0 && gl_speedAuto!=1)
-  	gl_speedAuto=1;
-  gl_speed = *((u16 *)(pFlash+2));  
- if(gl_speed==0xFFFF || gl_speed==0)
- 	gl_speed=1000;
-  for(u16 ii=0;ii<256;ii++)
-  {
-
-  	pSaveFileName[ii] = pFlash[256+ii];
-  }
-  if((pFlash[256]==0xFF) || (pFlash[256]==0x00))
-  {
-  	for(u16 ii=0;ii<256;ii++)
-  	{
-
-  		pSaveFileName[ii] ='\0';
-  	}
-  }
-//   _consolePrintf("pSaveFileName=%s\n",(char *)pSaveFileName);
-  free(pFlash);
-  pFlash=NULL;
-  
-  /**创建save目录,为备份存档做准备 开始********/
-   videoSetModeSub_SetShowLog(false);
-  u8 pSave[512];
-  char str[512];
-  FAT_FILE *h=NULL;
-  FAT_InitFiles();
-  FAT_mkdir("/save");
-  FAT_CWD("/save");  
-  if(strlen((char *)pSaveFileName)>0)
-  {
-  	  h=FAT_fopen((char *)pSaveFileName,"w");
-	  if(h==NULL)
-	  	_consolePrintf("open file %s fail\n",(char *)pSaveFileName);
-	  else
-	  {
-	  	_consolePrintf("back save file %s OK\n",(char *)pSaveFileName);
-		if(GetSaveSize()>0)
-		{
-		 MWin_ShowProgressDialog(2,0,0);
-		  for(s32 ii=0;ii<GetSaveSize();ii+=512)
-		  {
-		  	 //Enable_Arm9DS();
-		  	cardmeReadEeprom(ii,pSave,512,3);
-			//Enable_Arm7DS();
-			FAT_fwrite(pSave,512,1,h);
-			//if(ii%0x8000==0)
-				//_consolePrintf("load save file %d%s\n",(ii*100)/GetSaveSize(),"%"); 
-			if( (ii*10/GetSaveSize())>0)
-					MWin_ShowProgressDialog(2,ii*10/GetSaveSize(),0);
-		  }
-		}
-		FAT_fclose(h);
-		_consolePrintf("back save file OK\n");
-	  }
-   }
-  FAT_FreeFiles();
-  /**创建save目录,为备份存档做准备 结束*********/
-
-  MWin_AllRefresh();
-  
-  mainloop_RandomInit();
-  mainloop_TimeInit();
-  
-  if(GlobalINI.ClockPlugin.Enabled==false){
-    PluginBodyClock_RequestRefresh=false;
-    PluginBodyClock_Execute=false;
-    pPluginBodyClock=NULL;
-    
-    }else{
-    PluginBodyClock_RequestRefresh=true;
-    PluginBodyClock_Execute=false;
-    
-    char fn[PluginFilenameMax];
-    
-    DLLList_GetClockPluginFilename(0,fn);
-    pPluginBodyClock=DLLList_LoadPlugin(fn);
-    
-    if(pPluginBodyClock!=NULL){
-      if(pPluginBodyClock->pCL->Start(0)==false){ cwl();
-        _consolePrintf("Clock plugin start error.\n");
-        if(pPluginBodyClock!=NULL){
-          DLLList_FreePlugin(pPluginBodyClock);
-          safefree(pPluginBodyClock); pPluginBodyClock=NULL;
-        }
-      }
     }
-    
+    ProcState_RequestSave=true;
+    ProcState_Save();
   }
   
-#ifndef DisableStartupSound
-  if(GlobalINI.Boot.StartupSound==EIBSS_Startupmp3) MP3Boot_PlayFileFromShell("startup.mp3");
-#endif
+  Splash_Init();
   
-  _consolePrintf("read FileSystem.\n");
-  
-  FS_DispCount=MWin_GetClientHeight(WM_FileSelect)/FontProHeight;
-  Shell_VolumeType = VT_MPCF;
-#ifdef StartupIMFS
-  FS_ChangePath("//EXFS");
-#else
-  if(strcmp(GlobalINI.System.StartPath,"//AUTO")!=0){
-    FS_ChangePath(GlobalINI.System.StartPath);
-    }else{
-    switch(Shell_VolumeType){
-      case VT_NULL: FS_ChangePath("//"); break;
-      case VT_IMFS: FS_ChangePath("//IMFS"); break;
-      case VT_EXFS: FS_ChangePath("//EXFS"); break;
-      case VT_MPCF: FS_ChangePath("//EZSD"); break;
-      case VT_GBFS: FS_ChangePath("//GBFS"); break;
-      default: FS_ChangePath("//"); break;
+  if(true){
+    _consolePrintf("Initialize random seed.\n");
+    DateTime_ResetNow();
+    TDateTime now=DateTime_GetNow();
+    u32 cnt=((now.Time.Min*60)+now.Time.Sec)&0xff;
+    for(u32 idx=0;idx<cnt;idx++){
+      rand();
     }
   }
-  _test_PrintMediaType(false);
-#endif
   
-  PrintFreeMem();
-  WaitKeyClear(false);
+  ErrorDialog_Init();
   
+  Component_SetFont(pCglFontDefault);
+  
+  {
+    u32 keys=(~REG_KEYINPUT)&0x3ff;
+    if(keys==(KEY_A|KEY_B|KEY_L|KEY_R)){
+      ProcState_Clear();
+      ProcState_RequestSave=true;
+      ProcState_Save();
+      ProcState_Load();
+      
+      LaunchState_Init();
+      LaunchState_Save();
+      Skin_ClearCustomBG_FileBody();
+      Skin_ClearCustomBG();
+      Resume_Load();
+      Resume_Clear();
+      Resume_Save();
+      
+      pScreenSub->pCanvas->SetFontTextColor(RGB15(31,31,31)|BIT15);
+      pScreenSub->pCanvas->TextOutA(8,96,"All settings were initialized.");
+      pScreenSub->pCanvas->TextOutA(8,96+16,"Please release all key.");
+    }
+  }
+  
+  LaunchState_Load();
+  Resume_Load();
+  
+  ApplyCurrentBacklightLevel();
+  strpcmSetVolume64(ProcState.System.Volume64);
+  
+  BootROM_Init();
+  
+  Shell_Init_SwapFile();
+  
+  mf=false;
+  mx=0;
+  my=0;
+  
+  KEYS_Last=0;
   KeyRepeatLastKey=0;
   KeyRepeatFlag=false;
   KeyRepeatCount=0;
   
-  videoSetModeSub_SetShowLog(false);
+  DLLList_Init();
+  Splash_Update();
   
-  CheckTCM(__LINE__);
+  Sound_Init();
+  Splash_Update();
   
-//  videoSetModeSub_SetShowLog(true); _consolePrintf("success boot sequence process. stop.\n"); while(1);
-  
-  RefreshBacklightOffCount();
-  
-  if(Resume_Restore()==false){
-    if(GlobalINI.Boot.StartupSound==EIBSS_AutoPlay) Proc_StartSound_AutoPlay();
+  {
+    UnicodeChar *pcpu=ProcState.FileList.CurrentPathUnicode;
+    const char *pafn=StrConvert_Unicode2Ank_Test(pcpu);
+    _consolePrintf("Check current path. [%s]\n",pafn);
+    const char *pPathAlias=ConvertFull_Unicode2Alias(pcpu,NULL);
+    if(pPathAlias==NULL){
+      _consolePrintf("Set to default path.\n");
+      pcpu[0]=(UnicodeChar)'/';
+      pcpu[1]=(UnicodeChar)0;
+      }else{
+      if(FAT2_chdir_Alias(pPathAlias)==false){
+        _consolePrintf("Set to default path.\n");
+        pcpu[0]=(UnicodeChar)'/';
+        pcpu[1]=(UnicodeChar)0;
+        }else{
+        _consolePrintf("finded. [%s]\n",pPathAlias);
+      }
+    }
   }
   
-  u32 ResumeTimer=0;
+  Skin_ClearCustomBG();
   
-  while(1){ cwl();
-    if(strpcmRequestStop==true) strpcmRequestStop_Proc();
-    
-    if(ExecMode==EM_DPG){
-      strpcmUpdate_mainloop();
-      PrfStart();
-      ProcDPG();
-      PrfEnd(DPG_GetCurrentFrameCount());
-      
-      if(VsyncPassedCount==0) swiWaitForVBlank();
-      
-      REG_IME=0;
-      u32 VsyncCount=VsyncPassedCount;
-      VsyncPassedCount=0;
-      REG_IME=1;
-//      if(VsyncCount!=0) _consolePrintf("[hb%d]",IPC3->heartbeat);
-      
-      if(VsyncCount!=0){
-        mainloop_ProcVsync(VsyncCount);
-        if(MWin_GetVideoFullScreen()==false){ cwl();
-          if(MWin_GetVisible(WM_PlayControl)==true){ cwl();
-            static u32 pc=0;
-            if(pc<=VsyncCount){ cwl();
-              pc=0;
-              }else{ cwl();
-              pc-=VsyncCount;
-            }
-            if(pc==0){ cwl();
-              pc=30;
-              MWin_DrawClient(WM_PlayControl);
-              MWin_TransWindow(WM_PlayControl);
-            }
-          }
+  _consolePrintf("Set skin.\n");
+  if(Skin_SetFilename(ProcState.System.SkinFilenameUnicode)==false){
+    _consolePrintf("Set default skin.\n");
+    StrConvert_Ank2Unicode(DefaultDataPath "/default.skn",ProcState.System.SkinFilenameUnicode);
+    if(Skin_SetFilename(ProcState.System.SkinFilenameUnicode)==false){
+      _consolePrintf("Not found skin package.\n");
+      ShowLogHalt();
+    }
+  }
+  
+  PrintFreeMem();
+  Splash_Update();
+
+  VBlankPassedFlag=false;
+  VBlankPassedCount=0;
+  
+  _consolePrintf("Set NextProc.\n");
+  
+  RelationalFile_Clear();
+  
+  NextProc=ENP_Loop;
+  
+  {
+    u32 KEYS_Cur=(~REG_KEYINPUT)&0x3ff;
+    {
+      u32 btns=IPC6->buttons;
+      KEYS_Cur|=(~REG_KEYINPUT)&0x3ff;
+      if((btns&IPC_PEN_DOWN)!=0) KEYS_Cur|=KEY_TOUCH;
+      if((btns&IPC_X)!=0) KEYS_Cur|=KEY_X;
+      if((btns&IPC_Y)!=0) KEYS_Cur|=KEY_Y;
+    }
+    if((NextProc==ENP_Loop)&&(KEYS_Cur==0)) mainloop_autoboot(DefaultNFilename);
+    if((NextProc==ENP_Loop)&&(KEYS_Cur==KEY_X)) mainloop_autoboot(DefaultXFilename);
+    if((NextProc==ENP_Loop)&&(KEYS_Cur==KEY_Y)) mainloop_autoboot(DefaultYFilename);
+    if(NextProc!=ENP_Loop) Splash_Free();
+  }
+  
+  ExtLink_Init();
+  
+  atype_lockall();
+  if(NextProc==ENP_Loop){
+    atype_showallocated();
+    atype_checkoverrange();
+    atype_checkmemoryleak();
+    Splash_Update();
+  }
+  
+  if(NextProc==ENP_Loop){
+    // Resume_SetResumeMode(ERM_None); // Disabled resume function.
+    if(Resume_GetResumeMode()!=ERM_None){
+      _consolePrintf("Restart resume.\n");
+      UnicodeChar PathUnicode[MaxFilenameLength],FilenameUnicode[MaxFilenameLength];
+      SplitItemFromFullPathUnicode(Resume_GetFilename(),PathUnicode,FilenameUnicode);
+      if(FileExistsUnicode(PathUnicode,FilenameUnicode)==true){
+        Unicode_Copy(RelationalFilePathUnicode,PathUnicode);
+        Unicode_Copy(RelationalFileNameUnicode,FilenameUnicode);
+        Unicode_Copy(ProcState.FileList.CurrentPathUnicode,PathUnicode);
+        Unicode_Copy(ProcState.FileList.SelectFilenameUnicode,FilenameUnicode);
+        RelationalFilePos=Resume_GetPos();
+        Splash_Free();
+        switch(Resume_GetResumeMode()){
+          case ERM_None: break;
+          case ERM_Audio: {
+            SetNextProc(ENP_FileList,EPFE_CrossFade);
+          } break;
+          case ERM_Video: {
+            pScreenSub->pCanvas->FillFull(ColorTable.Video.InitBG);
+            SetNextProc(ENP_DPGPlay,EPFE_None);
+          } break;
+          case ERM_Image: {
+            SetNextProc(ENP_ImageView,EPFE_None);
+          } break;
+          case ERM_Text: {
+            SetNextProc(ENP_TextView,EPFE_None);
+          } break;
         }
       }
-      continue;
+      Resume_Clear();
+    }
+  }
+  
+  if(NextProc==ENP_Loop){
+    if(ProcState.System.BootCheckDisk==false){
+      if(ProcState.System.SkipSetup==false){
+        SetNextProc(ENP_Setup,EPFE_CrossFade);
+        }else{
+        switch(ProcState.System.LastState){
+          case ELS_FileList: SetNextProc(ENP_FileList,EPFE_CrossFade); break;
+          case ELS_Launch: SetNextProc(ENP_Launch,EPFE_CrossFade); break;
+        }
+      }
+      }else{
+      SetNextProc(ENP_ChkDsk,EPFE_CrossFade);
+    }
+  }
+  
+//  SetNextProc(ENP_Custom,EPFE_CrossFade);
+  
+  Proc_PanelOpened_Last=IPC6->PanelOpened;
+}
+
+static __attribute__ ((noinline)) void mainloop_ins_end(void)
+{
+  Skin_Free();
+  Skin_CloseFile();
+  
+  Lang_Free();
+  
+  Sound_Stop();
+  Sound_Free();
+  
+  _consolePrint("mainloop terminated.\n");
+  
+  _consolePrintf("Reboot ROM '%s'\n",BootROM_GetFullPathAlias());
+  BootNDSROM();
+}
+
+// ------------------------------------------------------------
+
+static bool chkstack;
+
+static __attribute__ ((noinline)) void mainloop_ins_loopstart(void)
+{
+    if(NextProc!=ENP_BootROM){
+      _consolePrintf("Wait for key releases.\n");
+      while(1){
+        if(IPC6->RequestUpdateIPC==false){
+          u32 btns=IPC6->buttons;
+          u32 keys=(~REG_KEYINPUT)&0x3ff;
+          if((btns&IPC_PEN_DOWN)!=0) keys|=KEY_TOUCH;
+          if((btns&IPC_X)!=0) keys|=KEY_X;
+          if((btns&IPC_Y)!=0) keys|=KEY_Y;
+          if(keys==0) break;
+          IPC6->RequestUpdateIPC=true;
+        }
+      }
     }
     
-    while(strpcmUpdate_mainloop()==true){ cwl();
-      if(GlobalINI.KeyRepeat.DelayCount<VsyncPassedCount) break;
+    chkstack=true;
+    if(NextProc==ENP_DPGPlay) chkstack=false;
+    
+    if(chkstack==true){ // setup stack overflow checker
+      u32 *p=pDTCMEND;
+      for(;p<(u32*)__current_sp();p++){
+        *p=(u32)p;
+      }
+      }else{
+      u32 *p=pMTCMEND;
+      for(;p<(u32*)__current_sp();p++){
+        *p=(u32)p;
+      }
     }
     
-    while(VsyncPassedCount==0){ cwl();
-      strpcmUpdate_mainloop();
-      CheckTCM(__LINE__);
-      swiWaitForIRQ();
+    CallBackInit();
+    
+    Skin_Free();
+    
+    switch(NextProc){
+      case ENP_Loop: {
+        _consolePrintf("Illigal process error! NextProc==ENP_Loop\n");
+        ShowLogHalt();
+      } break;
+      case ENP_ChkDsk: Skin_Load_ChkDsk(); break;
+      case ENP_Setup: Skin_Load_Setup(); break;
+      case ENP_FileList: Skin_Load_FileList(); break;
+      case ENP_SysMenu: Skin_Load_SysMenu(); break;
+      case ENP_DPGCustom: Skin_Load_DPGCustom(); break;
+      case ENP_DPGPlay: Skin_ClearCustomBG(); Skin_Load_DPGPlay(); break;
+      case ENP_ImageCustom: Skin_Load_ImageCustom(); break;
+      case ENP_ImageView: Skin_Load_ImageView(); break;
+      case ENP_TextCustom: Skin_Load_TextCustom(); break;
+      case ENP_TextView: Skin_Load_TextView(); break;
+      case ENP_Launch: Skin_Load_Launch(); break;
+      case ENP_Custom: Skin_Load_Custom(); break;
+      case ENP_BootROM: Skin_Load_BootROM(); break;
+      default: {
+        _consolePrintf("Unknown process error! NextProc==%d\n",NextProc);
+        ShowLogHalt();
+      } break;
     }
     
-    if(IPC3->RequestShotDown==true){
-      videoSetModeSub_SetShowLog(true);
-      Proc_Shutdown();
-      while(1);
+    if((NextProc==ENP_Setup)||(NextProc==ENP_FileList)||(NextProc==ENP_Launch)||(NextProc==ENP_Custom)||(NextProc==ENP_BootROM)) Splash_Free();
+    
+    switch(NextProc){
+      case ENP_Loop: {
+        _consolePrintf("Illigal process error! NextProc==ENP_Loop\n");
+        ShowLogHalt();
+      } break;
+      case ENP_ChkDsk: ProcChkDsk_SetCallBack(&CallBack); break;
+      case ENP_Setup: ProcSetup_SetCallBack(&CallBack); break;
+      case ENP_FileList: ProcFileList_SetCallBack(&CallBack); break;
+      case ENP_SysMenu: ProcSysMenu_SetCallBack(&CallBack); break;
+      case ENP_DPGCustom: ProcDPGCustom_SetCallBack(&CallBack); break;
+      case ENP_DPGPlay: ProcDPGPlay_SetCallBack(&CallBack); break;
+      case ENP_ImageCustom: ProcImageCustom_SetCallBack(&CallBack); break;
+      case ENP_ImageView: ProcImageView_SetCallBack(&CallBack); break;
+      case ENP_TextCustom: ProcTextCustom_SetCallBack(&CallBack); break;
+      case ENP_TextView: ProcTextView_SetCallBack(&CallBack); break;
+      case ENP_Launch: ProcLaunch_SetCallBack(&CallBack); break;
+      case ENP_Custom: ProcCustom_SetCallBack(&CallBack); break;
+      case ENP_BootROM: ProcBootROM_SetCallBack(&CallBack); break;
+      default: {
+        _consolePrintf("Unknown process error! NextProc==%d\n",NextProc);
+        ShowLogHalt();
+      } break;
     }
     
-    u32 VsyncCount;
+    NextProc=ENP_Loop;
+    
+    if(CallBack.Start!=NULL) CallBack.Start();
+    
+    if(chkstack==true){ // fast stack overflow checker
+      DTCM_StackCheck(-1);
+      }else{
+      MTCM_StackCheck(-1);
+    }
+    
+    ProcState_Save();
+    
+    atype_checkoverrange();
+    
+    PrintFreeMem();
+    
+    VBlankPassedFlag=false;
+    VBlankPassedCount=0;
+    Proc_TouchPad(0);
+    Proc_KeyInput_Init();
+    Proc_Trigger(true,0);
     
     REG_IME=0;
-    VsyncCount=VsyncPassedCount;
-    VsyncPassedCount=0;
+    VBlankPassedCount=0;
     REG_IME=1;
+}
+
+// ------------------------------------------------------------
+
+static __attribute__ ((noinline)) void mainloop_ins_loopend(void)
+{
+    VBlankPassedFlag=false;
+    VBlankPassedCount=0;
+    if(CallBack.End!=NULL) CallBack.End();
     
-    if(ExecMode!=EM_DPG) ProcBacklightOffCount(VsyncCount);
+    IPC6->LCDPowerControl=LCDPC_ON_BOTH;
     
-    if(ExecMode==EM_MSPImage) ImageControlTimeOut_ProcVSync(VsyncCount);
+    atype_checkoverrange();
+    atype_checkmemoryleak();
     
-    mainloop_ProcVsync(VsyncCount);
+    if(chkstack==true){
+      DTCM_StackCheck(0);
+      }else{
+      MTCM_StackCheck(0);
+    }
+}
+
+// ------------------------------------------------------------
+
+static __attribute__ ((noinline)) void mainloop(void)
+{
+  _consolePrint("mainloop.\n");
+  
+  mainloop_ins_start();
+  
+  DTCM_StackCheck(0);
+  
+  _consolePrintf("Start event loop...\n");
+  
+  while(1){
+    mainloop_ins_loopstart();
     
-    if((Resume_isEnabled()==true)&&(KEYS_CUR==0)){
-      if(ResumeTimer==0){
-        EExecMode em=ExecMode;
-        bool ReqResume=true;
-        if(em==EM_DPG) ReqResume=false;
-        if((em==EM_MSPSound)||(em==EM_GMENSF)||(em==EM_GMEGBS)){ // ||(em==EM_GMEVGM)||(em==EM_GMEGYM)
-          if(GlobalINI.System.ResumeUsingWhileMusicPlaying==false) ReqResume=false;
+    while(NextProc==ENP_Loop){
+      if(DLLSound_isOpened()==true){
+        while(DLLSound_Update()==true){
         }
-        if(ReqResume==true){
-          Resume_Backup(false);
-          if(em==EM_Text){
-            Bookmark_CurrentResumeBackup();
-            Bookmark_Save();
-          }
+        if(strpcmRequestStop==true){
+          if(CallBack.strpcmRequestStop!=NULL) CallBack.strpcmRequestStop();
         }
-        ResumeTimer=3*60;
+      }
+      
+      WaitForVBlank();
+      
+      REG_IME=0;
+      u32 vsynccount=VBlankPassedCount;
+      VBlankPassedCount=0;
+      REG_IME=1;
+      
+      if(CallBack.VsyncUpdate!=NULL) CallBack.VsyncUpdate(vsynccount);
+      
+      Proc_TouchPad(vsynccount);
+      Proc_KeyInput(vsynccount);
+      Proc_PanelOpened();
+      Proc_Trigger(false,vsynccount);
+      Proc_ExternalPowerPresent();
+      
+      if(chkstack==true){ // fast stack overflow checker
+        DTCM_StackCheck(-1);
         }else{
-        if(ResumeTimer<VsyncCount){
-          ResumeTimer=0;
-          }else{
-          ResumeTimer-=VsyncCount;
-        }
+        MTCM_StackCheck(-1);
       }
+      
     }
     
-    if(MWin_GetVisible(WM_PlayControl)==true){ cwl();
-      static u32 pc=0;
-      if(pc<=VsyncCount){ cwl();
-        pc=0;
-        }else{ cwl();
-        pc-=VsyncCount;
-      }
-      if(pc==0){ cwl();
-        pc=30;
-        MWin_DrawClient(WM_PlayControl);
-        MWin_TransWindow(WM_PlayControl);
-      }
-    }
+    mainloop_ins_loopend();
     
+    if(BootROM_GetExecuteFlag()==true) break;
   }
   
-  FS_ExecuteStop();
-  
-  if(pPluginBodyClock!=NULL){
-    DLLList_FreePlugin(pPluginBodyClock);
-    safefree(pPluginBodyClock); pPluginBodyClock=NULL;
-  }
-  
-  MWin_Free();
-  FileSys_Free();
+  mainloop_ins_end();
   
   ShowLogHalt();
 }
-
-#include "main_drawcb.h"
-#include "main_drawcb_closebutton.h"
-
