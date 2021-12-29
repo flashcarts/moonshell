@@ -1,0 +1,2 @@
+del Splash???.bmp
+pause

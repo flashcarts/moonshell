@@ -1,0 +1,52 @@
+LR_GBAROM 0x02000000+0x00000 0x400000-0x00000
+{
+    ER_BootLoader +0
+    {
+        init_tcm.o (INIT946TCM, +FIRST)   ; Core initialisation inc TCM enable
+        __main.o                         ; C Library entry point, must be in a root region
+        *  (Region$$Table)               ; this section must be in a root region 
+        *  (ZISection$$Table)            ; this section must be in a root region
+    }
+    
+    ER_Absolute +0
+    {
+        * (+RO)
+    }
+    
+    ER_RW +0
+    {
+        * (+RW)
+        * (+ZI)
+    }
+    
+    HEAP +0 UNINIT
+    {
+        heap.o (+ZI)                     ; heap follows directly from image data 
+    }
+    
+    ER_ITCM 0x01ff0000 0x8000
+    {
+        * (.itcm)
+        * (asmitcm)
+    }
+    
+    ER_DTCM 0x02800000
+    {
+        * (.dtcm)
+    }
+    
+    ER_MTCM_SET +0
+    {
+        header.o (.constdata)
+        slice.o (.constdata)
+        clibmpg.o (.constdata)
+        * (.mtcmset)
+        dtcmend.o (DTCMEND)
+    }
+    
+    ER_MTCM_VAR +0
+    {
+        * (.mtcmvar)
+        mtcmend.o (MTCMEND)
+    }
+}
